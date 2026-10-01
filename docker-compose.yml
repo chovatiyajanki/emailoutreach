@@ -1,0 +1,25 @@
+services:
+
+  redis:
+    image: redis:7-alpine
+    container_name: ai-mail-redis
+    restart: unless-stopped
+    ports:
+      - "6379:6379"
+
+  worker:
+    build:
+      context: ./ai-mail-automation/backend
+      dockerfile: Dockerfile.worker
+
+    container_name: ai-mail-worker
+
+    restart: unless-stopped
+
+    environment:
+      REDIS_URL: redis://redis:6379/0
+
+      DATABASE_URL: postgresql+psycopg://postgres:130303@host.docker.internal:5432/ai_mail
+
+    depends_on:
+      - redis

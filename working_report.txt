@@ -1,0 +1,136 @@
+Date : 29/09/2026
+
+AI Mail Automation Tool
+
+Overall Goal : 
+=> Defined the goal: build an AI-powered email automation system without n8n.
+
+Main Workflow Finalized :
+=> Collect leads
+=> Verify emails
+=> Select campaign leads
+=> Generate AI emails
+=> Send emails
+=> Track delivery/bounces
+=> Detect replies
+=> Analyze replies with AI
+=> Trigger follow-up actions automatically
+
+Technology Stack :
+=> Frontend: React + Vite
+=> Backend: FastAPI
+=> Database: PostgreSQL
+=> Queue: Redis
+=> Background Workers: Celery
+=> AI: OpenAI API
+=> Email: SMTP / Gmail API
+
+Database :
+=> Created and reviewed 17 PostgreSQL tables.
+=> Connected lead management with the leads table.
+=> Confirmed 3 lead records currently exist:
+      => Golden Crown Jewelers
+      => Brilliant Gems LLC
+      => Test Jewelry Store
+=> Current lead statuses:
+      => email_status = pending
+      => lead_status = new
+
+FastAPI :
+=> Fixed the Uvicorn application import path.
+=> Current command:
+      uvicorn app.main:app --reload
+=> Verified the Lead API structure with 15 lead fields.
+
+Redis :
+=> Configured Redis 7 using Docker.
+=> Redis container:
+      => ai-mail-redis
+=> Successfully tested Redis:
+      => PONG
+
+Celery :
+=> Configured Celery with Redis as broker/result backend.
+=> Fixed the incorrect Celery application path.
+=> Correct application path:
+      app.workers.celery_app:celery
+=> Worker is running successfully.
+=> Development concurrency configured as 1.
+
+Lead Worker :
+=> Created the process_new_lead Celery task.
+=> Fixed task import and registration issues.
+=> Established the automatic flow:
+
+      FastAPI
+      ↓
+      PostgreSQL
+      ↓
+      Redis
+      ↓
+      Celery
+      ↓
+      Worker
+
+Verification Worker :
+=> Built the verification-worker concept to:
+      => Check email syntax
+      => Check domain
+      => Check MX records
+      => Update lead verification status
+      => Save verification history
+=> Added the lead_verifications model and worker logic.
+
+Campaign Worker :
+=> Planned and built the Campaign Worker to:
+      Find verified leads
+      Exclude suppressed emails
+      Select the target number of leads
+      Insert selected leads into campaign_leads
+      Mark campaign status as ready
+
+Campaign API :
+=> Added:
+      POST /api/campaigns/{campaign_id}/select-leads
+=> Campaign selection conditions:
+      email_status = 'valid'
+      AND lead_status = 'verified'
+      Suppression-list check added before leads can be queued/sent.
+
+Campaign Pipeline :
+
+      Verified Leads
+            ↓
+      Campaign Worker
+            ↓
+      campaign_leads
+            ↓
+      AI Worker
+            ↓
+      Generate Email
+            ↓
+      emails
+            ↓
+      Sender Worker
+
+Testing Approach :
+=> Established testing with a small number of authorized/test recipients before scaling the workflow.
+
+Current Status : 
+
+FastAPI             ✅
+PostgreSQL          ✅
+Redis               ✅
+Celery              ✅
+Lead API            ✅
+Lead Worker         ✅
+Verification        ✅
+Campaign Worker     ✅
+Campaign Selection  ✅
+AI Worker           ⏳
+Email Generation    ⏳
+Sender Worker       ⏳
+
+Next Development Task :
+=> AI Worker + emails table integration
+=> Then implement the Sender Worker.

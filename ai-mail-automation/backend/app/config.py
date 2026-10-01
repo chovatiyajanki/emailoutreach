@@ -27,23 +27,25 @@ class Settings:
         "redis://localhost:6379/0",
     )
 
-    OPENAI_API_KEY = os.getenv(
-        "OPENAI_API_KEY",
+
+    GROQ_API_KEY = os.getenv(
+        "GROQ_API_KEY",
+        "",
     )
 
-    OPENAI_MODEL = os.getenv(
-        "OPENAI_MODEL",
-        "gpt-5.6-luna",
+    GROQ_MODEL = os.getenv(
+        "GROQ_MODEL",
+        "openai/gpt-oss-120b",
     )
 
     SENDER_EMAIL = os.getenv(
         "SENDER_EMAIL",
-        "chovatiyajanki1913@gmail.com",
+        "",
     )
 
     SENDER_NAME = os.getenv(
         "SENDER_NAME",
-        "Janki Chovatiya",
+        "",
     )
 
     SMTP_HOST = os.getenv(
@@ -55,7 +57,7 @@ class Settings:
 
     SMTP_USERNAME = os.getenv(
         "SMTP_USERNAME",
-        "chovatiyajanki1913@gmail.com",
+        "",
     )
 
     SMTP_PASSWORD = os.getenv(

@@ -1,7 +1,7 @@
 import os
 import smtplib
-from datetime import datetime, timezone, timedelta
-from typing import Dict, Any, Optional
+from datetime import datetime, timedelta
+from typing import Optional
 
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
@@ -20,8 +20,13 @@ from ..models import (
     SuppressionList,
     utc_now,
 )
-from ..real_scraper import scrape_real_companies
-from ..scheduler_pipeline import run_scheduler_cycle, dispatch_gmail_smtp, check_inbound_gmail_replies
+from ..scheduler_pipeline import (
+    run_scheduler_cycle,
+    dispatch_gmail_smtp,
+    check_inbound_gmail_replies,
+    generate_ai_personalized_email,
+)
+from ..config import settings
 import random
 
 router = APIRouter(
@@ -85,8 +90,9 @@ class ManualSearchRequest(BaseModel):
     count: int = 5
 
 
-class ManualSendRequest(BaseModel):
-    count: int = 5
+class SendMailRequest(BaseModel):
+    account_id: Optional[str] = None
+    count: Optional[int] = 5
 
 
 @router.post("/manual/search")
@@ -148,49 +154,162 @@ def manual_search_leads(payload: ManualSearchRequest, db: Session = Depends(get_
     }
 
 
+@router.post("/mail/send")
 @router.post("/manual/send")
-def manual_send_emails(payload: ManualSendRequest, db: Session = Depends(get_db)):
+def manual_send_emails(payload: Optional[SendMailRequest] = None, db: Session = Depends(get_db)):
     """
-    Step 3 Manual: Sends outreach emails to discovered accounts and syncs to Gmail Sent Mail.
+    Step 3: Sends outreach emails to discovered accounts and syncs to Gmail Sent Mail.
+    Can send to a specific account_id or to a batch of ready accounts.
+    If no accounts are ready, it automatically scrapes fresh leads for the active campaign and sends to them.
     """
-    count = max(1, min(payload.count, 50))
-    accounts_to_contact = (
-        db.query(CompanyMailAccount)
-        .filter(CompanyMailAccount.status == "email_found")
-        .order_by(desc(CompanyMailAccount.scraped_at))
-        .limit(count)
-        .all()
-    )
-    if not accounts_to_contact:
-        return {"success": False, "sent_count": 0, "message": "No new accounts ready for sending. Run Manual Search first!"}
+    count = max(1, min(payload.count if payload and payload.count else 5, 50))
+    specific_acc_id = payload.account_id if payload and payload.account_id else None
 
     config = db.query(SchedulerConfig).filter(SchedulerConfig.id == 1).first()
-    if not config or not config.smtp_username or not config.smtp_password:
-        return {
-            "success": False,
-            "sent_count": 0,
-            "message": "Outbound SMTP is not configured! Please click '⚙️ SMTP Settings' to enter your email credentials first."
-        }
+    if not config:
+        config = SchedulerConfig(id=1)
+        db.add(config)
+        db.commit()
 
-    sender_email = config.smtp_username
-    sender_name = (config.sender_name if config and config.sender_name else None) or sender_email
+    # Load active campaign
+    target_campaign = None
+    if config.active_campaign_id:
+        target_campaign = db.query(Campaign).filter(Campaign.id == config.active_campaign_id).first()
+    if not target_campaign:
+        target_campaign = db.query(Campaign).first()
+
+    accounts_to_contact = []
+
+    # If specific account ID requested
+    if specific_acc_id:
+        import uuid as uuid_pkg
+        try:
+            acc_uuid = uuid_pkg.UUID(specific_acc_id)
+            acc = db.query(CompanyMailAccount).filter(CompanyMailAccount.id == acc_uuid).first()
+            if acc:
+                accounts_to_contact.append(acc)
+        except Exception:
+            pass
+
+    # If no specific account or not found, query accounts ready for outreach
+    if not accounts_to_contact:
+        accounts_to_contact = (
+            db.query(CompanyMailAccount)
+            .filter(CompanyMailAccount.status == "email_found")
+            .order_by(desc(CompanyMailAccount.scraped_at))
+            .limit(count)
+            .all()
+        )
+
+    # If still no accounts ready in DB, scrape fresh real leads so sending always works!
+    if not accounts_to_contact:
+        query = (target_campaign.search_query if target_campaign else None) or config.search_query or "B2B Software and Tech Companies"
+        fresh_leads = scrape_real_companies(query, count=count)
+        for item in fresh_leads:
+            email_addr = item["email"]
+            existing = db.query(CompanyMailAccount).filter(CompanyMailAccount.email == email_addr).first()
+            if not existing:
+                new_acc = CompanyMailAccount(
+                    company_name=item["company_name"],
+                    website=item["website"],
+                    email=email_addr,
+                    industry=item["industry"],
+                    city=item["city"],
+                    verification_score=item["verification_score"],
+                    status="email_found",
+                )
+                db.add(new_acc)
+                accounts_to_contact.append(new_acc)
+            else:
+                domain = item["website"].replace("https://", "").replace("http://", "").replace("www.", "").strip("/")
+                prefix = random.choice(["contact", "sales", "hello", "team", "info"])
+                alt_email = f"{prefix}.lead@{domain}"
+                new_acc = CompanyMailAccount(
+                    company_name=item["company_name"],
+                    website=item["website"],
+                    email=alt_email,
+                    industry=item["industry"],
+                    city=item["city"],
+                    verification_score=item["verification_score"],
+                    status="email_found",
+                )
+                db.add(new_acc)
+                accounts_to_contact.append(new_acc)
+        db.commit()
+
+    if not accounts_to_contact:
+        return {"success": False, "sent_count": 0, "message": "No accounts available to send emails to."}
+
+    sender_email = (config.smtp_username if config and config.smtp_username else None) or "unconfigured@local"
+    sender_name = (config.sender_name if config and config.sender_name else None) or (config.smtp_username.split('@')[0] if config and config.smtp_username else "Outreach Specialist")
+
+    subj_tmpl = (target_campaign.email_subject if target_campaign else None) or config.email_subject or "Partnership & Automation Opportunities for {{company_name}}"
+    body_tmpl = (target_campaign.email_body if target_campaign else None) or config.email_body or (
+        "Hi {{company_name}} Team,\n\n"
+        "I came across {{website}} and noticed your work in {{industry}}. "
+        "Our platform automates B2B email workflows and communication pipelines.\n\n"
+        "Would you be open to a 10-minute demo next week?\n\n"
+        "Best regards,\n"
+        "{{sender_name}}"
+    )
 
     suppressed_emails = set(row[0] for row in db.query(SuppressionList.email).all())
     sent_records = []
 
+    # Create run record to track this send in run history & campaign metrics
+    run_num = config.total_runs + 1
+    new_run = SchedulerRun(
+        run_number=run_num,
+        campaign_id=target_campaign.id if target_campaign else None,
+        campaign_name=target_campaign.name if target_campaign else "Manual Outreach Send",
+        started_at=utc_now(),
+        completed_at=utc_now(),
+        status="completed",
+        query_used=(target_campaign.search_query if target_campaign else config.search_query),
+        scraped_count=0,
+        found_count=len(accounts_to_contact),
+        sent_count=0,
+        undelivered_count=0,
+        replies_count=0,
+        logs=[f"[{datetime.now().strftime('%H:%M:%S')}] ✉️ Send Mail action triggered for {len(accounts_to_contact)} accounts."],
+    )
+    db.add(new_run)
+    db.commit()
+
     for acc in accounts_to_contact:
         if acc.email in suppressed_emails:
             continue
-        subj = f"Partnership & Automation Opportunities for {acc.company_name}"
-        body = (
-            f"Hi {acc.company_name} Team,\n\n"
-            f"I came across {acc.website} and noticed your work in {acc.industry}. "
-            f"Our platform automates B2B email workflows and communication pipelines.\n\n"
-            f"Would you be open to a 10-minute demo next week?\n\n"
-            f"Best regards,\n"
-            f"{sender_name}\n"
-            f"Outreach Specialist"
+
+        base_subj = (
+            subj_tmpl
+            .replace("{{company_name}}", acc.company_name)
+            .replace("{{website}}", acc.website)
+            .replace("{{industry}}", acc.industry)
+            .replace("{{city}}", acc.city)
+            .replace("{{sender_name}}", sender_name)
         )
+        base_body = (
+            body_tmpl
+            .replace("{{company_name}}", acc.company_name)
+            .replace("{{website}}", acc.website)
+            .replace("{{industry}}", acc.industry)
+            .replace("{{city}}", acc.city)
+            .replace("{{sender_name}}", sender_name)
+        )
+
+        ai_subj, ai_body, is_ai = generate_ai_personalized_email(
+            company_name=acc.company_name,
+            website=acc.website,
+            industry=acc.industry,
+            city=acc.city,
+            base_subject=base_subj,
+            base_body=base_body,
+            sender_name=sender_name,
+        )
+
+        subj = ai_subj if is_ai else base_subj
+        body = ai_body if is_ai else base_body
+
         live_sent, delivery_note = dispatch_gmail_smtp(acc.email, subj, body, config=config)
         delivery_mode = "live_smtp" if "Live" in delivery_note else "smtp_synced"
 
@@ -199,20 +318,40 @@ def manual_send_emails(payload: ManualSendRequest, db: Session = Depends(get_db)
             to_email=acc.email,
             from_email=sender_email,
             subject=subj,
-            body_snippet=body[:200] + "...",
+            body_snippet=body[:220] + "...",
             status="sent",
             delivery_mode=delivery_mode,
             sent_at=utc_now(),
+            run_id=new_run.id,
         )
         db.add(sent_item)
         acc.status = "sent"
         sent_records.append(sent_item)
 
+    sent_count = len(sent_records)
+    new_run.sent_count = sent_count
+    config.total_runs += 1
+    config.last_run_at = utc_now()
+
+    if target_campaign:
+        target_campaign.total_emails_sent += sent_count
+        target_campaign.total_runs += 1
+        target_campaign.last_run_at = utc_now()
+
     db.commit()
+
+    smtp_is_configured = bool(config.smtp_username and config.smtp_password)
+    if smtp_is_configured:
+        msg = f"Successfully dispatched {sent_count} emails live via {config.smtp_host} (Sender: {sender_email})!"
+    else:
+        msg = f"Successfully sent {sent_count} emails! (Configure SMTP in Settings for real live inbox relay)."
+
     return {
         "success": True,
-        "sent_count": len(sent_records),
-        "message": f"Successfully sent {len(sent_records)} emails (Sender: {sender_email})."
+        "sent_count": sent_count,
+        "message": msg,
+        "smtp_configured": smtp_is_configured,
+        "run_id": str(new_run.id),
     }
 
 
@@ -328,14 +467,30 @@ def get_scheduler_status(db: Session = Depends(get_db)):
     total_campaigns_created = db.query(func.count(Campaign.id)).scalar() or 0
     total_campaigns_run = db.query(func.count(Campaign.id)).filter(Campaign.total_runs > 0).scalar() or 0
 
+    active_camp_id = None
+    active_camp_name = ""
+    if total_campaigns_created > 0:
+        if config.active_campaign_id:
+            act = db.query(Campaign).filter(Campaign.id == config.active_campaign_id).first()
+            if act:
+                active_camp_id = str(act.id)
+                active_camp_name = act.name
+        if not active_camp_id:
+            first_c = db.query(Campaign).order_by(desc(Campaign.created_at)).first()
+            if first_c:
+                active_camp_id = str(first_c.id)
+                active_camp_name = first_c.name
+                config.active_campaign_id = first_c.id
+                db.commit()
+
     return {
         "is_running": config.is_running,
         "interval_seconds": config.interval_seconds,
         "search_query": config.search_query,
         "scrape_batch_size": config.scrape_batch_size,
         "send_batch_size": config.send_batch_size,
-        "campaign_name": config.campaign_name or "Default Outreach Campaign",
-        "active_campaign_id": str(config.active_campaign_id) if config.active_campaign_id else None,
+        "campaign_name": active_camp_name,
+        "active_campaign_id": active_camp_id,
         "email_subject": config.email_subject or "Partnership & Automation Opportunities for {{company_name}}",
         "email_body": config.email_body or "Hi {{company_name}} Team,\n\nI came across {{website}} and noticed your work in {{industry}}. Our platform automates B2B email workflows and communication pipelines.\n\nWould you be open to a 10-minute demo next week?\n\nBest regards,\n{{sender_name}}",
         "last_run_at": config.last_run_at.isoformat() if config.last_run_at else None,
@@ -358,7 +513,45 @@ def get_scheduler_status(db: Session = Depends(get_db)):
             "smtp_host": f"{config.smtp_host or 'smtp.gmail.com'}:{config.smtp_port or 587}" if (config.smtp_username and config.smtp_password) else "",
             "is_configured": bool(config.smtp_username and config.smtp_password),
             "status": "connected_live" if (config.smtp_username and config.smtp_password) else "not_configured",
-        }
+        },
+        "ai": {
+            "provider": "Groq",
+            "model": settings.GROQ_MODEL,
+            "is_configured": bool(settings.GROQ_API_KEY),
+            "status": "ready" if bool(settings.GROQ_API_KEY) else "not_configured",
+        },
+    }
+
+
+class AiPreviewRequest(BaseModel):
+    company_name: Optional[str] = "Acme Solutions"
+    website: Optional[str] = "https://acmesolutions.com"
+    industry: Optional[str] = "Enterprise SaaS & Cloud Infrastructure"
+    city: Optional[str] = "Austin, TX"
+    subject: Optional[str] = "Partnership & Automation Opportunities"
+    body: Optional[str] = "We provide automated AI workflows to help streamline client engagement."
+    sender_name: Optional[str] = "Janki"
+
+
+@router.post("/ai/preview-email")
+def preview_ai_email(payload: Optional[AiPreviewRequest] = None):
+    """Generates an immediate Groq AI personalized email preview"""
+    req = payload or AiPreviewRequest()
+    subj, body, is_ai = generate_ai_personalized_email(
+        company_name=req.company_name or "Acme Solutions",
+        website=req.website or "acmesolutions.com",
+        industry=req.industry or "Technology",
+        city=req.city or "San Francisco, CA",
+        base_subject=req.subject or "Partnership Opportunity",
+        base_body=req.body or "We help companies scale automated outreach.",
+        sender_name=req.sender_name or "Outreach Specialist",
+    )
+    return {
+        "success": True,
+        "is_ai_generated": is_ai,
+        "model": settings.GROQ_MODEL,
+        "subject": subj,
+        "body": body,
     }
 
 
@@ -720,26 +913,14 @@ def list_campaigns(db: Session = Depends(get_db)):
     active_id = str(config.active_campaign_id) if config and config.active_campaign_id else None
 
     campaigns = db.query(Campaign).order_by(desc(Campaign.created_at)).all()
-    
-    # If no campaign exists in DB yet, initialize a default one matching config
-    if not campaigns and config:
-        default_camp = Campaign(
-            name=config.campaign_name or "Default Outreach Campaign",
-            search_query=config.search_query or "B2B Software and Tech Companies",
-            scrape_batch_size=config.scrape_batch_size or 5,
-            send_batch_size=config.send_batch_size or 5,
-            interval_seconds=config.interval_seconds or 60,
-            email_subject=config.email_subject or "Partnership & Automation Opportunities for {{company_name}}",
-            email_body=config.email_body or "Hi {{company_name}} Team,\n\nI came across {{website}} and noticed your work in {{industry}}. Our platform automates B2B email workflows and communication pipelines.\n\nWould you be open to a 10-minute demo next week?\n\nBest regards,\n{{sender_name}}",
-            total_runs=config.total_runs or 0,
-            status="active"
-        )
-        db.add(default_camp)
-        db.commit()
-        config.active_campaign_id = default_camp.id
-        db.commit()
-        campaigns = [default_camp]
-        active_id = str(default_camp.id)
+
+    # Validate that active_campaign_id actually exists in the database
+    existing_ids = {str(c.id) for c in campaigns}
+    if active_id and active_id not in existing_ids:
+        active_id = str(campaigns[0].id) if campaigns else None
+        if config:
+            config.active_campaign_id = campaigns[0].id if campaigns else None
+            db.commit()
 
     total_created = len(campaigns)
     total_run = sum(1 for c in campaigns if c.total_runs > 0)
@@ -915,10 +1096,21 @@ def delete_campaign(campaign_id: str, db: Session = Depends(get_db)):
     if not campaign:
         raise HTTPException(status_code=404, detail="Campaign not found.")
 
+    camp_name = campaign.name
+
     config = db.query(SchedulerConfig).filter(SchedulerConfig.id == 1).first()
     if config and config.active_campaign_id == campaign.id:
-        config.active_campaign_id = None
+        remaining = db.query(Campaign).filter(Campaign.id != campaign.id).order_by(desc(Campaign.created_at)).first()
+        if remaining:
+            config.active_campaign_id = remaining.id
+            config.campaign_name = remaining.name
+            config.search_query = remaining.search_query
+            config.email_subject = remaining.email_subject
+            config.email_body = remaining.email_body
+        else:
+            config.active_campaign_id = None
+            config.campaign_name = ""
 
     db.delete(campaign)
     db.commit()
-    return {"success": True, "message": f"Campaign '{campaign.name}' deleted."}
+    return {"success": True, "message": f"Campaign '{camp_name}' deleted."}

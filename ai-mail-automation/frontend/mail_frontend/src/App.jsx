@@ -38,6 +38,12 @@ export default function App() {
       is_configured: false,
       status: 'not_configured',
     },
+    ai: {
+      provider: 'Groq',
+      model: 'openai/gpt-oss-120b',
+      is_configured: false,
+      status: 'not_configured',
+    },
   })
 
   // Editable config state (User-controlled, NEVER overwritten by polling)
@@ -72,6 +78,7 @@ export default function App() {
   const [smtpTestResult, setSmtpTestResult] = useState(null)
 
   // Table records state
+  const [isSendingMail, setIsSendingMail] = useState(false)
   const [campaigns, setCampaigns] = useState([])
   const [accounts, setAccounts] = useState([])
   const [sentMails, setSentMails] = useState([])
@@ -79,18 +86,6 @@ export default function App() {
   const [replies, setReplies] = useState([])
   const [runs, setRuns] = useState([])
 
-  // Auto-save setting changes immediately to backend
-  const autoSaveField = async (partialUpdate) => {
-    try {
-      await fetch('http://localhost:8000/api/scheduler/config', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(partialUpdate),
-      })
-    } catch {
-      // Ignore background network errors
-    }
-  }
 
   // Fetch status and all data from FastAPI
   const fetchAllData = async () => {
@@ -132,6 +127,23 @@ export default function App() {
       }
     } catch {
       // Backend polling error
+    }
+  }
+
+  // Fetch SMTP settings from backend
+  const fetchSmtpSettings = async () => {
+    try {
+      const res = await fetch('http://localhost:8000/api/smtp/settings')
+      if (res.ok) {
+        const data = await res.json()
+        if (data.smtp_host) setSmtpHost(data.smtp_host)
+        if (data.smtp_port) setSmtpPort(data.smtp_port)
+        if (data.smtp_username) setSmtpUsername(data.smtp_username)
+        if (data.smtp_password) setSmtpPassword(data.smtp_password)
+        if (data.sender_name) setSmtpSenderName(data.sender_name)
+      }
+    } catch {
+      // Backend offline
     }
   }
 
@@ -355,30 +367,34 @@ export default function App() {
     }
   }
 
-  // Save configuration changes
-  const handleSaveConfig = async () => {
+  // Dedicated Send Mail handler
+  const handleSendMail = async (accountId = null) => {
+    setIsSendingMail(true)
+    setFeedbackMsg(accountId ? 'Sending outreach email to company account...' : 'Sending outreach emails...')
     try {
-      const res = await fetch('http://localhost:8000/api/scheduler/config', {
+      const res = await fetch('http://localhost:8000/api/mail/send', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
-          campaign_name: campaignName,
-          search_query: editQuery,
-          interval_seconds: Number(editInterval),
-          scrape_batch_size: Number(editScrapeBatch),
-          send_batch_size: Number(editSendBatch),
-          email_subject: campaignSubject,
-          email_body: campaignBody,
+          account_id: accountId,
+          count: Number(editSendBatch) || 5,
         }),
       })
-      if (res.ok) {
+      const data = await res.json()
+      if (res.ok && data.success) {
         await fetchAllData()
-        setFeedbackMsg('Configuration saved successfully.')
+        setActiveTab('sent')
+        setFeedbackMsg(`✓ ${data.message}`)
+      } else {
+        setFeedbackMsg(data.message || 'Failed to send emails.')
       }
     } catch {
-      setFeedbackMsg('Failed to save configuration.')
+      setFeedbackMsg('Error sending email. Please check backend connection.')
+    } finally {
+      setIsSendingMail(false)
     }
   }
+
 
   // Fresh start: wipe all data in database
   const handleResetAllData = async () => {
@@ -396,22 +412,6 @@ export default function App() {
     }
   }
 
-  // Fetch SMTP settings from backend
-  const fetchSmtpSettings = async () => {
-    try {
-      const res = await fetch('http://localhost:8000/api/smtp/settings')
-      if (res.ok) {
-        const data = await res.json()
-        if (data.smtp_host) setSmtpHost(data.smtp_host)
-        if (data.smtp_port) setSmtpPort(data.smtp_port)
-        if (data.smtp_username) setSmtpUsername(data.smtp_username)
-        if (data.smtp_password) setSmtpPassword(data.smtp_password)
-        if (data.sender_name) setSmtpSenderName(data.sender_name)
-      }
-    } catch {
-      // Backend offline
-    }
-  }
 
   // Test SMTP connection live
   const handleTestSmtp = async () => {
@@ -527,10 +527,9 @@ export default function App() {
           ==================================================================== */}
       <header className="top-navbar">
         <div className="nav-brand">
-          <div className="brand-symbol">⚡</div>
+          <div className="brand-symbol"></div>
           <div className="brand-details">
             <span className="brand-heading">Outreach Scheduler</span>
-            <span className="brand-subtext">Automated 5-Step Pipeline (FastAPI + PostgreSQL + Gmail)</span>
           </div>
         </div>
 
@@ -545,12 +544,23 @@ export default function App() {
             </div>
           )}
 
+          {/* {status.ai?.is_configured && (
+            <div
+              className="sender-pill configured"
+              style={{ borderColor: 'rgba(168, 85, 247, 0.35)', background: 'rgba(168, 85, 247, 0.12)', color: '#c084fc' }}
+              title={`Groq LLM Active: ${status.ai.model} dynamically crafts personalized cold emails for each prospect`}
+            >
+              <span className="live-indicator" style={{ background: '#a855f7', boxShadow: '0 0 8px #a855f7' }}></span>
+              <span>✨ Groq: {status.ai.model}</span>
+            </div>
+          )} */}
+
           <button
             className="nav-btn btn-smtp-settings"
             onClick={() => { fetchSmtpSettings(); setIsSmtpModalOpen(true); }}
             title="Configure custom SMTP mail server & credentials"
           >
-            ⚙️ SMTP Settings
+             SMTP Settings
           </button>
 
           <a
@@ -560,7 +570,7 @@ export default function App() {
             className="nav-btn"
             title="Open real Gmail Inbox"
           >
-            📥 Gmail Inbox
+             Gmail Inbox
           </a>
 
           <a
@@ -570,7 +580,7 @@ export default function App() {
             className="nav-btn"
             title="Open real Gmail Sent folder"
           >
-            ↗ Gmail Sent Box
+             Gmail Sent Box
           </a>
 
           <button className="nav-btn" onClick={fetchAllData} title="Refresh records">
@@ -582,7 +592,7 @@ export default function App() {
             onClick={handleResetAllData}
             title="Delete all tables and start fresh"
           >
-            🗑 Fresh Start
+             Fresh Start
           </button>
         </div>
       </header>
@@ -607,7 +617,7 @@ export default function App() {
                   onClick={() => setActiveTab('campaigns')}
                   style={{ cursor: 'pointer' }}
                 >
-                  📋 Campaigns Created: <strong>{status.summary?.total_campaigns_created ?? campaigns.length}</strong>
+                   Campaigns Created: <strong>{status.summary?.total_campaigns_created ?? campaigns.length}</strong>
                 </span>
                 <span
                   className="hero-stat-badge highlight-run"
@@ -615,7 +625,7 @@ export default function App() {
                   onClick={() => setActiveTab('campaigns')}
                   style={{ cursor: 'pointer' }}
                 >
-                  🚀 Campaigns Run: <strong>{status.summary?.total_campaigns_run ?? 0}</strong>
+                   Campaigns Run: <strong>{status.summary?.total_campaigns_run ?? 0}</strong>
                 </span>
                 <span>Cycles Completed: <strong>{status.total_runs}</strong></span>
                 {status.is_running && status.seconds_until_next_run !== null && (
@@ -630,23 +640,32 @@ export default function App() {
                 onClick={() => setIsCampaignModalOpen(true)}
                 title="Create and configure a new outreach campaign"
               >
-                ➕ Create Campaign
+                 Create Campaign
+              </button>
+
+              <button
+                className="btn-send-mail"
+                disabled={isSendingMail || isTriggering}
+                onClick={() => handleSendMail()}
+                title="Send outreach emails to discovered company accounts right now"
+              >
+                {isSendingMail ? ' Sending Mails...' : ' Send Mail'}
               </button>
 
               <button
                 className={`btn-toggle-scheduler ${status.is_running ? 'stop' : 'start'}`}
                 onClick={handleToggleScheduler}
               >
-                {status.is_running ? '⏸ Stop Scheduler' : '▶ Start Scheduler'}
+                {status.is_running ? '⏸ Stop Scheduler' : ' Start Scheduler'}
               </button>
 
               <button
                 className="btn-trigger-now"
-                disabled={isTriggering}
+                disabled={isTriggering || isSendingMail}
                 onClick={handleTriggerNow}
                 title="Execute 5-step cycle immediately without waiting for timer"
               >
-                {isTriggering ? '⏳ Running Cycle...' : '⚡ Run Cycle Now'}
+                {isTriggering ? ' Running Cycle...' : ' Run Cycle Now'}
               </button>
             </div>
           </div>
@@ -670,7 +689,7 @@ export default function App() {
             className={`pipeline-step-node ${activeTab === 'accounts' ? 'selected' : ''}`}
             onClick={() => setActiveTab('accounts')}
           >
-            <div className="node-icon-circle step-1">🔍</div>
+            {/* <div className="node-icon-circle step-1">🔍</div> */}
             <div className="node-content">
               <span className="node-step-tag">Step 1</span>
               <span className="node-title">Scrape Accounts</span>
@@ -678,14 +697,14 @@ export default function App() {
             </div>
           </div>
 
-          <span className="pipeline-flow-arrow">→</span>
+          <span className="pipeline-flow-arrow"> </span>
 
           {/* STEP 2: FIND COUNT */}
           <div
             className={`pipeline-step-node ${activeTab === 'accounts' ? 'selected' : ''}`}
             onClick={() => setActiveTab('accounts')}
           >
-            <div className="node-icon-circle step-2">📊</div>
+            {/* <div className="node-icon-circle step-2">📊</div> */}
             <div className="node-content">
               <span className="node-step-tag">Step 2</span>
               <span className="node-title">Find Accounts</span>
@@ -693,14 +712,14 @@ export default function App() {
             </div>
           </div>
 
-          <span className="pipeline-flow-arrow">→</span>
+          <span className="pipeline-flow-arrow"></span>
 
           {/* STEP 3: SEND MAILS */}
           <div
             className={`pipeline-step-node ${activeTab === 'sent' ? 'selected' : ''}`}
             onClick={() => setActiveTab('sent')}
           >
-            <div className="node-icon-circle step-3">✉️</div>
+            {/* <div className="node-icon-circle step-3">✉️</div> */}
             <div className="node-content">
               <span className="node-step-tag">Step 3</span>
               <span className="node-title">Send Mails</span>
@@ -708,14 +727,14 @@ export default function App() {
             </div>
           </div>
 
-          <span className="pipeline-flow-arrow">→</span>
+          <span className="pipeline-flow-arrow"></span>
 
           {/* STEP 4: UNDELIVERED */}
           <div
             className={`pipeline-step-node ${activeTab === 'undelivered' ? 'selected' : ''}`}
             onClick={() => setActiveTab('undelivered')}
           >
-            <div className="node-icon-circle step-4">⚠️</div>
+            {/* <div className="node-icon-circle step-4">⚠️</div> */}
             <div className="node-content">
               <span className="node-step-tag">Step 4</span>
               <span className="node-title">Undelivered</span>
@@ -723,14 +742,14 @@ export default function App() {
             </div>
           </div>
 
-          <span className="pipeline-flow-arrow">→</span>
+          <span className="pipeline-flow-arrow"></span>
 
           {/* STEP 5: REPLIES */}
           <div
             className={`pipeline-step-node ${activeTab === 'replies' ? 'selected' : ''}`}
             onClick={() => setActiveTab('replies')}
           >
-            <div className="node-icon-circle step-5">💬</div>
+            {/* <div className="node-icon-circle step-5">💬</div> */}
             <div className="node-content">
               <span className="node-step-tag">Step 5</span>
               <span className="node-title">Find Replies</span>
@@ -749,7 +768,7 @@ export default function App() {
                 className={`tab-pill-btn ${activeTab === 'campaigns' ? 'active' : ''}`}
                 onClick={() => setActiveTab('campaigns')}
               >
-                <span>📢 Campaigns</span>
+                <span> Campaigns</span>
                 <span className="tab-badge">{campaigns.length}</span>
               </button>
 
@@ -757,7 +776,7 @@ export default function App() {
                 className={`tab-pill-btn ${activeTab === 'accounts' ? 'active' : ''}`}
                 onClick={() => setActiveTab('accounts')}
               >
-                <span>🏢 Scraped Accounts</span>
+                <span> Scraped Accounts</span>
                 <span className="tab-badge">{accounts.length}</span>
               </button>
 
@@ -765,7 +784,7 @@ export default function App() {
                 className={`tab-pill-btn ${activeTab === 'sent' ? 'active' : ''}`}
                 onClick={() => setActiveTab('sent')}
               >
-                <span>✈️ Sent Mails</span>
+                <span> Sent Mails</span>
                 <span className="tab-badge">{sentMails.length}</span>
               </button>
 
@@ -773,7 +792,7 @@ export default function App() {
                 className={`tab-pill-btn ${activeTab === 'undelivered' ? 'active' : ''}`}
                 onClick={() => setActiveTab('undelivered')}
               >
-                <span>⚠️ Undelivered Mails</span>
+                <span> Undelivered Mails</span>
                 <span className="tab-badge">{undeliveredMails.length}</span>
               </button>
 
@@ -781,7 +800,7 @@ export default function App() {
                 className={`tab-pill-btn ${activeTab === 'replies' ? 'active' : ''}`}
                 onClick={() => setActiveTab('replies')}
               >
-                <span>💬 Received Replies</span>
+                <span> Received Replies</span>
                 <span className="tab-badge">{replies.length}</span>
               </button>
 
@@ -789,13 +808,12 @@ export default function App() {
                 className={`tab-pill-btn ${activeTab === 'runs' ? 'active' : ''}`}
                 onClick={() => setActiveTab('runs')}
               >
-                <span>📜 Run History &amp; Logs</span>
+                <span> Run History &amp; Logs</span>
                 <span className="tab-badge">{runs.length}</span>
               </button>
             </div>
 
             <div className="filter-search-box">
-              <span>🔍</span>
               <input
                 type="text"
                 className="filter-search-input"
@@ -813,25 +831,25 @@ export default function App() {
                 {/* Campaigns Summary Header */}
                 <div className="campaigns-metrics-banner">
                   <div className="campaign-stat-box created-stat">
-                    <span className="stat-label">📋 Total Campaigns Created</span>
-                    <span className="stat-value">{status.summary?.total_campaigns_created || campaigns.length}</span>
+                    <span className="stat-label"> Total Campaigns Created</span>
+                    <span className="stat-value">{status.summary?.total_campaigns_created ?? campaigns.length}</span>
                     <span className="stat-desc">Distinct campaigns in PostgreSQL</span>
                   </div>
 
                   <div className="campaign-stat-box run-stat">
-                    <span className="stat-label">🚀 Total Campaigns Run</span>
-                    <span className="stat-value">{status.summary?.total_campaigns_run || 0}</span>
+                    <span className="stat-label"> Total Campaigns Run</span>
+                    <span className="stat-value">{status.summary?.total_campaigns_run ?? 0}</span>
                     <span className="stat-desc">Campaigns executed at least once</span>
                   </div>
 
                   <div className="campaign-stat-box">
-                    <span className="stat-label">🎯 Total Cycles Completed</span>
+                    <span className="stat-label"> Total Cycles Completed</span>
                     <span className="stat-value">{status.total_runs || campaigns.reduce((acc, c) => acc + (c.total_runs || 0), 0)}</span>
                     <span className="stat-desc">5-step background automation cycles</span>
                   </div>
 
                   <div className="campaign-stat-box">
-                    <span className="stat-label">✉️ Total Emails Dispatched</span>
+                    <span className="stat-label"> Total Emails Dispatched</span>
                     <span className="stat-value">{status.summary?.step_3_sent_emails || campaigns.reduce((acc, c) => acc + (c.total_emails_sent || 0), 0)}</span>
                     <span className="stat-desc">Emails sent live across all campaigns</span>
                   </div>
@@ -839,17 +857,17 @@ export default function App() {
 
                 {filterRows(campaigns).length === 0 ? (
                   <div className="no-data-box">
-                    <div className="no-data-icon">📢</div>
+                    <div className="no-data-icon"></div>
                     <h4 className="no-data-title">No Campaigns Created Yet</h4>
                     <p className="no-data-hint">
-                      Click <strong>"➕ Create Campaign"</strong> above to define target industries, pitches, and begin outreach.
+                      Click <strong>" Create Campaign"</strong> above to define target industries, pitches, and begin outreach.
                     </p>
                     <button
                       className="btn-create-campaign"
                       style={{ marginTop: '16px' }}
                       onClick={() => setIsCampaignModalOpen(true)}
                     >
-                      ➕ Create First Campaign
+                       Create First Campaign
                     </button>
                   </div>
                 ) : (
@@ -878,7 +896,7 @@ export default function App() {
                               <strong style={{ fontSize: '13.5px', color: '#f8fafc' }}>{camp.name}</strong>
                               {camp.is_active && (
                                 <span className="campaign-active-pill" title="This campaign is currently active in the background scheduler">
-                                  🟢 ACTIVE
+                                   ACTIVE
                                 </span>
                               )}
                             </div>
@@ -911,7 +929,7 @@ export default function App() {
                                 title={`Execute a 5-step cycle for "${camp.name}" right now`}
                                 disabled={isTriggering}
                               >
-                                ⚡ Run
+                                 Run
                               </button>
                               {!camp.is_active ? (
                                 <button
@@ -919,7 +937,7 @@ export default function App() {
                                   onClick={() => handleActivateCampaign(camp.id, camp.name)}
                                   title={`Set "${camp.name}" as the active scheduler campaign`}
                                 >
-                                  ▶ Activate
+                                   Activate
                                 </button>
                               ) : (
                                 <span className="camp-active-label">Active</span>
@@ -929,7 +947,7 @@ export default function App() {
                                 onClick={() => handleDeleteCampaign(camp.id, camp.name)}
                                 title={`Delete campaign "${camp.name}"`}
                               >
-                                🗑
+                                Delete
                               </button>
                             </div>
                           </td>
@@ -944,57 +962,111 @@ export default function App() {
             {activeTab === 'accounts' && (
               filterRows(accounts).length === 0 ? (
                 <div className="no-data-box">
-                  <div className="no-data-icon">🏢</div>
+                  <div className="no-data-icon"></div>
                   <h4 className="no-data-title">No Scraped Accounts Yet</h4>
                   <p className="no-data-hint">
-                    Click <strong>"⚡ Run Cycle Now"</strong> or <strong>"▶ Start Scheduler"</strong> above to scrape company mail accounts automatically.
+                    Click <strong>" Send Mail"</strong> or <strong>" Run Cycle Now"</strong> above to scrape company mail accounts and dispatch outreach emails automatically.
                   </p>
+                  <div style={{ display: 'flex', gap: '10px', marginTop: '14px', justifyContent: 'center' }}>
+                    <button
+                      className="btn-send-mail"
+                      disabled={isSendingMail}
+                      onClick={() => handleSendMail()}
+                    >
+                      {isSendingMail ? ' Sending...' : ' Send Mail Now'}
+                    </button>
+                    <button
+                      className="btn-trigger-now"
+                      disabled={isTriggering}
+                      onClick={handleTriggerNow}
+                    >
+                       Run Cycle Now
+                    </button>
+                  </div>
                 </div>
               ) : (
-                <table className="outreach-table">
-                  <thead>
-                    <tr>
-                      <th className="th-num">#</th>
-                      <th>Company</th>
-                      <th>Discovered Email</th>
-                      <th>Website</th>
-                      <th>Industry</th>
-                      <th>City</th>
-                      <th>Score</th>
-                      <th>Status</th>
-                      <th>Scraped Date</th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {filterRows(accounts).map((acc, idx) => (
-                      <tr key={acc.id} onClick={() => setSelectedRecord({ type: 'account', data: acc })}>
-                        <td className="td-num">{idx + 1}</td>
-                        <td style={{ fontWeight: 600 }}>{acc.company_name}</td>
-                        <td style={{ color: '#60a5fa', fontWeight: 500 }}>{acc.email}</td>
-                        <td>
-                          <a
-                            href={acc.website}
-                            target="_blank"
-                            rel="noreferrer"
-                            style={{ color: '#818cf8', textDecoration: 'none' }}
-                            onClick={(e) => e.stopPropagation()}
-                          >
-                            {acc.website}
-                          </a>
-                        </td>
-                        <td>{acc.industry}</td>
-                        <td>{acc.city}</td>
-                        <td>{acc.verification_score}/100</td>
-                        <td>
-                          <span className={`status-chip ${acc.status}`}>
-                            {acc.status}
-                          </span>
-                        </td>
-                        <td style={{ color: '#94a3b8' }}>{acc.scraped_at}</td>
+                <div>
+                  <div className="accounts-table-toolbar">
+                    <div className="accounts-toolbar-info">
+                      <span>Total Accounts: <strong>{accounts.length}</strong></span>
+                      <span>•</span>
+                      <span>Ready for Outreach: <strong style={{ color: '#38bdf8' }}>{accounts.filter(a => a.status === 'email_found').length}</strong></span>
+                      <span>•</span>
+                      <span>Contacted: <strong style={{ color: '#34d399' }}>{accounts.filter(a => a.status === 'sent' || a.status === 'replied').length}</strong></span>
+                    </div>
+                    <button
+                      className="btn-send-mail-small"
+                      disabled={isSendingMail}
+                      onClick={() => handleSendMail()}
+                      title="Send emails to discovered accounts"
+                    >
+                      {isSendingMail ? ' Sending Mails...' : ' Send Mail to Accounts'}
+                    </button>
+                  </div>
+
+                  <table className="outreach-table">
+                    <thead>
+                      <tr>
+                        <th className="th-num">#</th>
+                        <th>Company</th>
+                        <th>Discovered Email</th>
+                        <th>Website</th>
+                        <th>Industry</th>
+                        <th>City</th>
+                        <th>Score</th>
+                        <th>Status</th>
+                        <th>Scraped Date</th>
+                        <th style={{ textAlign: 'right' }}>Action</th>
                       </tr>
-                    ))}
-                  </tbody>
-                </table>
+                    </thead>
+                    <tbody>
+                      {filterRows(accounts).map((acc, idx) => (
+                        <tr key={acc.id} onClick={() => setSelectedRecord({ type: 'account', data: acc })}>
+                          <td className="td-num">{idx + 1}</td>
+                          <td style={{ fontWeight: 600 }}>{acc.company_name}</td>
+                          <td style={{ color: '#60a5fa', fontWeight: 500 }}>{acc.email}</td>
+                          <td>
+                            <a
+                              href={acc.website}
+                              target="_blank"
+                              rel="noreferrer"
+                              style={{ color: '#818cf8', textDecoration: 'none' }}
+                              onClick={(e) => e.stopPropagation()}
+                            >
+                              {acc.website}
+                            </a>
+                          </td>
+                          <td>{acc.industry}</td>
+                          <td>{acc.city}</td>
+                          <td>{acc.verification_score}/100</td>
+                          <td>
+                            <span className={`status-chip ${acc.status}`}>
+                              {acc.status}
+                            </span>
+                          </td>
+                          <td style={{ color: '#94a3b8' }}>{acc.scraped_at}</td>
+                          <td style={{ textAlign: 'right' }}>
+                            {acc.status === 'email_found' ? (
+                              <button
+                                className="btn-row-send-mail"
+                                disabled={isSendingMail}
+                                onClick={(e) => {
+                                  e.stopPropagation()
+                                  handleSendMail(acc.id)
+                                }}
+                                title={`Send outreach email directly to ${acc.email}`}
+                              >
+                                 Send
+                              </button>
+                            ) : (
+                              <span className="text-sent-done">✓ Sent</span>
+                            )}
+                          </td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
               )
             )}
 
@@ -1002,7 +1074,7 @@ export default function App() {
             {activeTab === 'sent' && (
               filterRows(sentMails).length === 0 ? (
                 <div className="no-data-box">
-                  <div className="no-data-icon">✈️</div>
+                  <div className="no-data-icon"></div>
                   <h4 className="no-data-title">No Sent Emails Yet</h4>
                   <p className="no-data-hint">
                     When the scheduler runs Step 3, it dispatches personalized emails to discovered accounts live via Gmail SMTP.
@@ -1046,7 +1118,7 @@ export default function App() {
             {activeTab === 'undelivered' && (
               filterRows(undeliveredMails).length === 0 ? (
                 <div className="no-data-box">
-                  <div className="no-data-icon">⚠️</div>
+                  <div className="no-data-icon"></div>
                   <h4 className="no-data-title">No Undelivered Mails Detected</h4>
                   <p className="no-data-hint">
                     Step 4 monitors delivery failures and automatically suppresses invalid recipient mailboxes.
@@ -1086,7 +1158,7 @@ export default function App() {
             {activeTab === 'replies' && (
               filterRows(replies).length === 0 ? (
                 <div className="no-data-box">
-                  <div className="no-data-icon">💬</div>
+                  <div className="no-data-icon"></div>
                   <h4 className="no-data-title">No Inbound Replies Yet</h4>
                   <p className="no-data-hint">
                     Step 5 scans for lead responses and classifies intent (Interested, Meeting Requested, etc.).
@@ -1128,10 +1200,10 @@ export default function App() {
             {activeTab === 'runs' && (
               filterRows(runs).length === 0 ? (
                 <div className="no-data-box">
-                  <div className="no-data-icon">📜</div>
+                  <div className="no-data-icon"></div>
                   <h4 className="no-data-title">No Scheduler Cycles Executed Yet</h4>
                   <p className="no-data-hint">
-                    Click <strong>"⚡ Run Cycle Now"</strong> to execute Cycle #1.
+                    Click <strong>" Run Cycle Now"</strong> to execute Cycle #1.
                   </p>
                 </div>
               ) : (
@@ -1176,7 +1248,7 @@ export default function App() {
                   {runs[0]?.logs && (
                     <div className="logs-terminal">
                       <div style={{ color: '#f8fafc', fontWeight: 700, marginBottom: '8px' }}>
-                        📋 Latest Execution Log (Run #{runs[0].run_number}):
+                         Latest Execution Log (Run #{runs[0].run_number}):
                       </div>
                       {runs[0].logs.map((logLine, idx) => (
                         <div key={idx}>{logLine}</div>
@@ -1304,7 +1376,7 @@ export default function App() {
             {/* Header */}
             <div className="campaign-modal-header">
               <div className="campaign-header-left">
-                <div className="campaign-icon-badge">✨</div>
+                <div className="campaign-icon-badge"></div>
                 <div>
                   <h3 className="campaign-modal-title">Create Outreach Campaign</h3>
                   <p className="campaign-modal-subtitle">
@@ -1327,7 +1399,7 @@ export default function App() {
               {/* SECTION 1: CAMPAIGN TARGET & QUERY */}
               <div className="campaign-section-card">
                 <div className="section-card-title">
-                  <span>🎯</span>
+                  <span></span>
                   <span>Campaign Target &amp; Industry</span>
                 </div>
 
@@ -1382,7 +1454,7 @@ export default function App() {
               {/* SECTION 2: AUTOMATION BATCHES & INTERVAL */}
               <div className="campaign-section-card">
                 <div className="section-card-title">
-                  <span>⚙️</span>
+                  <span></span>
                   <span>Pipeline Automation Settings</span>
                 </div>
 
@@ -1437,7 +1509,7 @@ export default function App() {
               {/* SECTION 3: PERSONALIZED EMAIL TEMPLATE */}
               <div className="campaign-section-card">
                 <div className="section-card-title">
-                  <span>✉️</span>
+                  <span></span>
                   <span>Personalized Email Pitch</span>
                 </div>
 
@@ -1516,12 +1588,12 @@ export default function App() {
                       onClick={() => { fetchSmtpSettings(); setIsSmtpModalOpen(true); }}
                       title="Edit custom SMTP credentials"
                     >
-                      ⚙️ Edit SMTP
+                       Edit SMTP
                     </button>
                   </div>
                 ) : (
                   <div className="campaign-sender-note warning">
-                    <span className="sender-note-icon">⚠️</span>
+                    <span className="sender-note-icon"></span>
                     <div style={{ flex: 1, minWidth: 0 }}>
                       <span style={{ color: '#fde047', fontWeight: 600 }}>No Sender SMTP Configured! </span>
                       <span style={{ fontSize: '11.5px', color: '#cbd5e1' }}>Set up your email credentials so this campaign can dispatch messages.</span>
@@ -1532,7 +1604,7 @@ export default function App() {
                       onClick={() => { fetchSmtpSettings(); setIsSmtpModalOpen(true); }}
                       title="Configure SMTP email credentials"
                     >
-                      ⚙️ Set Up SMTP
+                       Set Up SMTP
                     </button>
                   </div>
                 )}
@@ -1555,7 +1627,7 @@ export default function App() {
                   onClick={handleSaveCampaignOnly}
                   title="Save campaign to database without starting scheduler"
                 >
-                  💾 Save Standby
+                   Save Standby
                 </button>
                 <button
                   type="button"
@@ -1563,7 +1635,7 @@ export default function App() {
                   onClick={handleSaveAndStartScheduler}
                   title="Save configuration and start periodic background schedule"
                 >
-                  ▶ Save &amp; Start Scheduler
+                   Save &amp; Start Scheduler
                 </button>
                 <button
                   type="button"
@@ -1571,7 +1643,7 @@ export default function App() {
                   onClick={handleLaunchCampaign}
                   title="Save configuration and immediately run a 5-step cycle right now"
                 >
-                  ⚡ Launch &amp; Run Now
+                   Launch &amp; Run Now
                 </button>
               </div>
             </div>
@@ -1588,7 +1660,7 @@ export default function App() {
             {/* Header */}
             <div className="campaign-modal-header">
               <div className="campaign-header-left">
-                <div className="campaign-icon-badge smtp-icon-badge">⚙️</div>
+                <div className="campaign-icon-badge smtp-icon-badge"></div>
                 <div>
                   <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
                     <h3 className="campaign-modal-title">SMTP Mail Server Settings</h3>
@@ -1612,7 +1684,7 @@ export default function App() {
             <div className="campaign-modal-body">
               {/* Presets Strip */}
               <div className="smtp-presets-card">
-                <span className="smtp-presets-label">⚡ Quick Presets:</span>
+                <span className="smtp-presets-label"> Quick Presets:</span>
                 <div className="smtp-presets-list">
                   <button
                     type="button"
@@ -1655,7 +1727,7 @@ export default function App() {
               {/* Server & Port Row */}
               <div className="campaign-section-card">
                 <div className="section-card-title">
-                  <span>🌐</span>
+                  <span></span>
                   <span>Server Connection</span>
                 </div>
 
@@ -1689,7 +1761,7 @@ export default function App() {
               {/* Authentication Credentials Row */}
               <div className="campaign-section-card">
                 <div className="section-card-title">
-                  <span>🔐</span>
+                  <span></span>
                   <span>Authentication Credentials</span>
                 </div>
 
@@ -1743,7 +1815,7 @@ export default function App() {
 
                 {/* Helpful Note for Gmail Users */}
                 <div className="smtp-info-box">
-                  <span className="info-icon">💡</span>
+                  <span className="info-icon"></span>
                   <span>
                     <strong>Gmail Notice:</strong> If your account has 2-Step Verification enabled, generate an
                     <strong> App Password</strong> at <code>myaccount.google.com/apppasswords</code> and enter it above.
@@ -1777,7 +1849,7 @@ export default function App() {
                   disabled={smtpTesting || !smtpHost || !smtpUsername || !smtpPassword}
                   title="Test authentication without saving"
                 >
-                  {smtpTesting ? '⏳ Testing...' : '🧪 Test Connection'}
+                  {smtpTesting ? ' Testing...' : ' Test Connection'}
                 </button>
 
                 {(status.mailbox.email || smtpUsername) && (
@@ -1787,7 +1859,7 @@ export default function App() {
                     onClick={handleRemoveSmtp}
                     title="Remove and reset saved SMTP credentials"
                   >
-                    🗑️ Remove Settings
+                     Remove Settings
                   </button>
                 )}
               </div>
@@ -1807,7 +1879,7 @@ export default function App() {
                   disabled={smtpSaving || !smtpHost || !smtpUsername || !smtpPassword}
                   title="Save manual SMTP credentials to PostgreSQL"
                 >
-                  {smtpSaving ? 'Saving...' : '💾 Save SMTP Settings'}
+                  {smtpSaving ? 'Saving...' : ' Save SMTP Settings'}
                 </button>
               </div>
             </div>

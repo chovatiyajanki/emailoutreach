@@ -4,15 +4,20 @@ import imaplib
 import email
 import email.utils
 import time
+import json
+import urllib.request
+import re
 from email.mime.text import MIMEText
 from email.mime.multipart import MIMEMultipart
 from datetime import datetime, timezone, timedelta
 import random
 import uuid
-from typing import Dict, Any, List, Optional
+from typing import Dict, Any, List, Optional, Tuple
+
+from .config import settings
 
 from sqlalchemy.orm import Session
-from sqlalchemy import func, select, desc
+from sqlalchemy import func, desc
 
 from .models import (
     Campaign,
@@ -29,6 +34,106 @@ from .real_scraper import scrape_real_companies
 
 
 EMAIL_PREFIXES = ["contact", "info", "hello", "sales", "support", "team", "partnerships"]
+
+
+def generate_ai_personalized_email(
+    company_name: str,
+    website: str,
+    industry: str,
+    city: str,
+    base_subject: str,
+    base_body: str,
+    sender_name: str,
+) -> Tuple[str, str, bool]:
+    """
+    Uses Groq LLM (e.g., openai/gpt-oss-120b) to generate a personalized,
+    high-converting B2B cold outreach email tailored to the prospect's company & industry.
+    Falls back gracefully to template replacement if Groq is unavailable or errors out.
+    """
+    api_key = settings.GROQ_API_KEY or os.getenv("GROQ_API_KEY", "")
+    model = settings.GROQ_MODEL or os.getenv("GROQ_MODEL", "openai/gpt-oss-120b")
+
+    if not api_key:
+        return base_subject, base_body, False
+
+    prompt = f"""You are a high-performing B2B cold email copywriter.
+Write a personalized cold outreach email tailored specifically for this prospect:
+- Company Name: {company_name}
+- Website: {website}
+- Industry: {industry}
+- Location: {city}
+- Sender Name: {sender_name}
+- Campaign Theme / Reference: {base_subject} | {base_body}
+
+Strict Guidelines:
+1. Under 80 words in the body.
+2. Natural, professional, zero hype or buzzwords.
+3. Directly reference how our automation/solution helps a company in the {industry} space.
+4. Output format MUST be strictly:
+Subject: <compelling 4-7 word subject line>
+Body:
+<clean email body ending with {sender_name}>
+"""
+    try:
+        url = "https://api.groq.com/openai/v1/chat/completions"
+        headers = {
+            "Authorization": f"Bearer {api_key}",
+            "Content-Type": "application/json",
+            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AI-Mail-Automation/1.0",
+        }
+        data = {
+            "model": model,
+            "messages": [{"role": "user", "content": prompt}],
+            "temperature": 0.6,
+            "max_tokens": 800,
+        }
+        req = urllib.request.Request(url, data=json.dumps(data).encode("utf-8"), headers=headers)
+        with urllib.request.urlopen(req, timeout=12) as response:
+            res = json.loads(response.read().decode("utf-8"))
+            content = res.get("choices", [{}])[0].get("message", {}).get("content", "").strip()
+
+            if content:
+                # Normalize unicode quotes, hyphens, and whitespace
+                cleaned = (
+                    content.replace("\u2011", "-")
+                    .replace("\u2010", "-")
+                    .replace("\u2013", "-")
+                    .replace("\u2014", "-")
+                    .replace("\u2018", "'")
+                    .replace("\u2019", "'")
+                    .replace("\u201c", '"')
+                    .replace("\u201d", '"')
+                    .replace("\u202f", " ")
+                    .replace("\u00a0", " ")
+                )
+
+                subject_match = re.search(r"^Subject:\s*(.+)$", cleaned, re.MULTILINE | re.IGNORECASE)
+                body_match = re.search(r"^Body:\s*(.+)$", cleaned, re.MULTILINE | re.IGNORECASE | re.DOTALL)
+
+                subject = subject_match.group(1).strip() if subject_match else base_subject
+
+                if body_match:
+                    body = body_match.group(1).strip()
+                elif subject_match:
+                    body = re.sub(r"^Subject:\s*.+$\n*", "", cleaned, flags=re.MULTILINE | re.IGNORECASE).strip()
+                else:
+                    body = cleaned
+
+                # Safety replace of placeholders in case model preserved any
+                body = (
+                    body.replace("{{company_name}}", company_name)
+                    .replace("{{website}}", website)
+                    .replace("{{industry}}", industry)
+                    .replace("{{city}}", city)
+                    .replace("{{sender_name}}", sender_name)
+                )
+
+                return subject, body, True
+    except Exception:
+        # Gracefully handle API timeout, rate limit, or invalid response
+        pass
+
+    return base_subject, base_body, False
 
 
 def sync_to_gmail_sent_mail(to_email: str, subject: str, body: str, config: Optional[SchedulerConfig] = None) -> bool:
@@ -366,7 +471,7 @@ def run_scheduler_cycle(
             "Best regards,\n"
             "{{sender_name}}"
         )
-        subj = (
+        base_subj = (
             subj_tmpl
             .replace("{{company_name}}", acc.company_name)
             .replace("{{website}}", acc.website)
@@ -374,7 +479,7 @@ def run_scheduler_cycle(
             .replace("{{city}}", acc.city)
             .replace("{{sender_name}}", sender_name)
         )
-        body = (
+        base_body = (
             body_tmpl
             .replace("{{company_name}}", acc.company_name)
             .replace("{{website}}", acc.website)
@@ -382,6 +487,23 @@ def run_scheduler_cycle(
             .replace("{{city}}", acc.city)
             .replace("{{sender_name}}", sender_name)
         )
+
+        # Generate hyper-personalized email via Groq LLM (falls back to base template if unavailable)
+        ai_subj, ai_body, is_ai_generated = generate_ai_personalized_email(
+            company_name=acc.company_name,
+            website=acc.website,
+            industry=acc.industry,
+            city=acc.city,
+            base_subject=base_subj,
+            base_body=base_body,
+            sender_name=sender_name,
+        )
+
+        subj = ai_subj if is_ai_generated else base_subj
+        body = ai_body if is_ai_generated else base_body
+
+        if is_ai_generated:
+            log(f"  ✨ [Groq AI: {settings.GROQ_MODEL}] Personalized email crafted for {acc.company_name}")
 
         # Dispatch live via configured SMTP and sync to Gmail Sent Mailbox if Gmail
         live_sent, delivery_note = dispatch_gmail_smtp(acc.email, subj, body, config=config)

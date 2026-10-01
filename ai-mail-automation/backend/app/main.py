@@ -38,5 +38,4 @@ def root():
         "success": True,
         "service": "Automated Outreach Pipeline API",
         "database": "PostgreSQL Connected",
-        "mailbox": "chovatiyajanki1913@gmail.com",
     }

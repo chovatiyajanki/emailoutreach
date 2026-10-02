@@ -1,5 +1,8 @@
 import os
 import smtplib
+import json
+import urllib.request
+import re
 from datetime import datetime, timedelta
 from typing import Optional
 
@@ -28,6 +31,12 @@ from ..scheduler_pipeline import (
 )
 from ..config import settings
 from ..real_scraper import scrape_real_companies
+from ..company_utils import (
+    extract_domain,
+    normalize_company_name,
+    get_already_contacted_companies,
+    is_company_already_contacted,
+)
 import random
 
 router = APIRouter(
@@ -104,39 +113,50 @@ def manual_search_leads(payload: ManualSearchRequest, db: Session = Depends(get_
     query = payload.query.strip() or "B2B Software and Tech Companies"
     count = max(1, min(payload.count, 50))
 
-    real_leads = scrape_real_companies(query, count=count)
+    contacted_emails, contacted_domains, contacted_names = get_already_contacted_companies(db)
+    existing_domains = {extract_domain(r[0]) for r in db.query(CompanyMailAccount.website).all() if r[0]}
+    existing_domains.update({extract_domain(r[0]) for r in db.query(CompanyMailAccount.email).all() if r[0]})
+    existing_names = {normalize_company_name(r[0]) for r in db.query(CompanyMailAccount.company_name).all() if r[0]}
+    existing_emails = {r[0].strip().lower() for r in db.query(CompanyMailAccount.email).all() if r[0]}
+
+    all_exclude_domains = contacted_domains.union(existing_domains)
+    all_exclude_names = contacted_names.union(existing_names)
+
+    real_leads = scrape_real_companies(
+        query,
+        count=count,
+        exclude_domains=all_exclude_domains,
+        exclude_names=all_exclude_names,
+    )
     inserted_accounts = []
 
     for item in real_leads:
-        email_addr = item["email"]
-        existing = db.query(CompanyMailAccount).filter(CompanyMailAccount.email == email_addr).first()
-        if not existing:
-            account = CompanyMailAccount(
-                company_name=item["company_name"],
-                website=item["website"],
-                email=email_addr,
-                industry=item["industry"],
-                city=item["city"],
-                verification_score=item["verification_score"],
-                status="email_found",
-            )
-            db.add(account)
-            inserted_accounts.append(account)
-        else:
-            domain = item["website"].replace("https://", "").replace("http://", "").replace("www.", "").strip("/")
-            prefix = random.choice(["contact", "sales", "hello", "team", "info"])
-            alt_email = f"{prefix}.lead@{domain}"
-            account = CompanyMailAccount(
-                company_name=item["company_name"],
-                website=item["website"],
-                email=alt_email,
-                industry=item["industry"],
-                city=item["city"],
-                verification_score=item["verification_score"],
-                status="email_found",
-            )
-            db.add(account)
-            inserted_accounts.append(account)
+        email_addr = item["email"].strip().lower()
+        dom = extract_domain(item.get("website") or email_addr)
+        norm_name = normalize_company_name(item["company_name"])
+
+        if (email_addr in existing_emails or
+            email_addr in contacted_emails or
+            dom in all_exclude_domains or
+            norm_name in all_exclude_names):
+            continue
+
+        account = CompanyMailAccount(
+            company_name=item["company_name"],
+            website=item["website"],
+            email=email_addr,
+            industry=item["industry"],
+            city=item["city"],
+            verification_score=item["verification_score"],
+            status="email_found",
+        )
+        db.add(account)
+        inserted_accounts.append(account)
+        existing_emails.add(email_addr)
+        if dom:
+            all_exclude_domains.add(dom)
+        if norm_name:
+            all_exclude_names.add(norm_name)
 
     db.commit()
 
@@ -179,7 +199,10 @@ def manual_send_emails(payload: Optional[SendMailRequest] = None, db: Session = 
     if not target_campaign:
         target_campaign = db.query(Campaign).first()
 
+    contacted_emails, contacted_domains, contacted_names = get_already_contacted_companies(db)
     accounts_to_contact = []
+    seen_batch_domains = set()
+    seen_batch_names = set()
 
     # If specific account ID requested
     if specific_acc_id:
@@ -188,54 +211,89 @@ def manual_send_emails(payload: Optional[SendMailRequest] = None, db: Session = 
             acc_uuid = uuid_pkg.UUID(specific_acc_id)
             acc = db.query(CompanyMailAccount).filter(CompanyMailAccount.id == acc_uuid).first()
             if acc:
+                if is_company_already_contacted(
+                    acc.company_name, acc.website, acc.email,
+                    contacted_emails, contacted_domains, contacted_names
+                ):
+                    return {
+                        "success": False,
+                        "sent_count": 0,
+                        "message": f"'{acc.company_name}' ({acc.email}) has already received an email. Strictly 1 mail is allowed per company."
+                    }
                 accounts_to_contact.append(acc)
         except Exception:
             pass
 
     # If no specific account or not found, query accounts ready for outreach
     if not accounts_to_contact:
-        accounts_to_contact = (
+        candidate_accounts = (
             db.query(CompanyMailAccount)
             .filter(CompanyMailAccount.status == "email_found")
             .order_by(desc(CompanyMailAccount.scraped_at))
-            .limit(count)
             .all()
         )
+        for acc in candidate_accounts:
+            acc_em = acc.email.strip().lower()
+            acc_dom = extract_domain(acc.website) or extract_domain(acc_em)
+            acc_norm = normalize_company_name(acc.company_name)
+
+            if is_company_already_contacted(
+                acc.company_name, acc.website, acc_em,
+                contacted_emails, contacted_domains, contacted_names
+            ):
+                acc.status = "already_contacted"
+                continue
+
+            if (acc_dom and acc_dom in seen_batch_domains) or (acc_norm and acc_norm in seen_batch_names):
+                acc.status = "duplicate_skipped"
+                continue
+
+            accounts_to_contact.append(acc)
+            if acc_dom:
+                seen_batch_domains.add(acc_dom)
+            if acc_norm:
+                seen_batch_names.add(acc_norm)
+
+            if len(accounts_to_contact) >= count:
+                break
 
     # If still no accounts ready in DB, scrape fresh real leads so sending always works!
-    if not accounts_to_contact:
+    if len(accounts_to_contact) < count:
+        needed = count - len(accounts_to_contact)
         query = (target_campaign.search_query if target_campaign else None) or config.search_query or "B2B Software and Tech Companies"
-        fresh_leads = scrape_real_companies(query, count=count)
+        fresh_leads = scrape_real_companies(
+            query,
+            count=needed,
+            exclude_domains=contacted_domains.union(seen_batch_domains),
+            exclude_names=contacted_names.union(seen_batch_names),
+        )
         for item in fresh_leads:
-            email_addr = item["email"]
-            existing = db.query(CompanyMailAccount).filter(CompanyMailAccount.email == email_addr).first()
-            if not existing:
-                new_acc = CompanyMailAccount(
-                    company_name=item["company_name"],
-                    website=item["website"],
-                    email=email_addr,
-                    industry=item["industry"],
-                    city=item["city"],
-                    verification_score=item["verification_score"],
-                    status="email_found",
-                )
-                db.add(new_acc)
-                accounts_to_contact.append(new_acc)
-            else:
-                domain = item["website"].replace("https://", "").replace("http://", "").replace("www.", "").strip("/")
-                prefix = random.choice(["contact", "sales", "hello", "team", "info"])
-                alt_email = f"{prefix}.lead@{domain}"
-                new_acc = CompanyMailAccount(
-                    company_name=item["company_name"],
-                    website=item["website"],
-                    email=alt_email,
-                    industry=item["industry"],
-                    city=item["city"],
-                    verification_score=item["verification_score"],
-                    status="email_found",
-                )
-                db.add(new_acc)
-                accounts_to_contact.append(new_acc)
+            new_em = item["email"].strip().lower()
+            new_dom = extract_domain(item.get("website") or new_em)
+            new_norm = normalize_company_name(item["company_name"])
+
+            if (new_em in contacted_emails or
+                new_dom in contacted_domains or
+                new_norm in contacted_names or
+                new_dom in seen_batch_domains or
+                new_norm in seen_batch_names):
+                continue
+
+            new_acc = CompanyMailAccount(
+                company_name=item["company_name"],
+                website=item["website"],
+                email=new_em,
+                industry=item["industry"],
+                city=item["city"],
+                verification_score=item["verification_score"],
+                status="email_found",
+            )
+            db.add(new_acc)
+            accounts_to_contact.append(new_acc)
+            if new_dom:
+                seen_batch_domains.add(new_dom)
+            if new_norm:
+                seen_batch_names.add(new_norm)
         db.commit()
 
     if not accounts_to_contact:
@@ -278,7 +336,19 @@ def manual_send_emails(payload: Optional[SendMailRequest] = None, db: Session = 
     db.commit()
 
     for acc in accounts_to_contact:
-        if acc.email in suppressed_emails:
+        acc_email = acc.email.strip().lower()
+        acc_dom = extract_domain(acc.website) or extract_domain(acc_email)
+        acc_norm = normalize_company_name(acc.company_name)
+
+        if acc_email in suppressed_emails:
+            continue
+
+        # Strict 1-Mail-Per-Company Guard
+        if is_company_already_contacted(
+            acc.company_name, acc.website, acc_email,
+            contacted_emails, contacted_domains, contacted_names
+        ):
+            acc.status = "already_contacted"
             continue
 
         base_subj = (
@@ -300,7 +370,8 @@ def manual_send_emails(payload: Optional[SendMailRequest] = None, db: Session = 
 
         # Check if the user wrote their own custom campaign subject & body
         is_user_custom_copy = bool(
-            target_campaign and target_campaign.email_subject and target_campaign.email_body
+            (target_campaign and target_campaign.email_subject and target_campaign.email_body)
+            or (config and config.email_subject and config.email_body)
         )
 
         if is_user_custom_copy:
@@ -336,6 +407,12 @@ def manual_send_emails(payload: Optional[SendMailRequest] = None, db: Session = 
         db.add(sent_item)
         acc.status = "sent"
         sent_records.append(sent_item)
+
+        contacted_emails.add(acc_email)
+        if acc_dom:
+            contacted_domains.add(acc_dom)
+        if acc_norm:
+            contacted_names.add(acc_norm)
 
     sent_count = len(sent_records)
     new_run.sent_count = sent_count
@@ -1138,3 +1215,107 @@ def delete_campaign(campaign_id: str, db: Session = Depends(get_db)):
     db.delete(campaign)
     db.commit()
     return {"success": True, "message": f"Campaign '{camp_name}' deleted."}
+
+
+class TemplateSaveRequest(BaseModel):
+    subject: str
+    body: str
+    campaign_id: Optional[str] = None
+
+
+class TemplateEnhanceRequest(BaseModel):
+    subject: str
+    body: str
+    tone: Optional[str] = "professional"
+
+
+@router.post("/template/save")
+def save_email_template(payload: TemplateSaveRequest, db: Session = Depends(get_db)):
+    """Saves email template to SchedulerConfig and active Campaign"""
+    config = db.query(SchedulerConfig).filter(SchedulerConfig.id == 1).first()
+    if not config:
+        config = SchedulerConfig(id=1)
+        db.add(config)
+
+    config.email_subject = payload.subject.strip()
+    config.email_body = payload.body
+
+    target_camp_id = None
+    if payload.campaign_id:
+        import uuid as uuid_pkg
+        try:
+            target_camp_id = uuid_pkg.UUID(payload.campaign_id)
+        except Exception:
+            pass
+    elif config.active_campaign_id:
+        target_camp_id = config.active_campaign_id
+
+    if target_camp_id:
+        camp = db.query(Campaign).filter(Campaign.id == target_camp_id).first()
+        if camp:
+            camp.email_subject = payload.subject.strip()
+            camp.email_body = payload.body
+    else:
+        # Fallback: also apply to all existing campaigns so no campaign is left with old copy
+        for camp in db.query(Campaign).all():
+            camp.email_subject = payload.subject.strip()
+            camp.email_body = payload.body
+
+    db.commit()
+    return {"success": True, "message": "Email template saved & active for outreach!"}
+
+
+@router.post("/template/enhance")
+def enhance_email_template(payload: TemplateEnhanceRequest):
+    """Uses Groq AI to polish and improve cold email copy while preserving all variables"""
+    api_key = settings.GROQ_API_KEY or os.getenv("GROQ_API_KEY", "")
+    if not api_key:
+        return {"success": False, "subject": payload.subject, "body": payload.body, "message": "Groq API key not configured"}
+
+    tone = payload.tone or "professional"
+    prompt = f"""You are an elite B2B cold email copywriter.
+Enhance and rewrite this email template to make it {tone}, engaging, and high-converting.
+
+CRITICAL CONSTRAINTS:
+1. You MUST PRESERVE all placeholder variables exactly as written: {{{{company_name}}}}, {{{{website}}}}, {{{{city}}}}, {{{{industry}}}}, {{{{sender_name}}}}.
+2. Keep the body concise, clear, and compelling (under 120 words).
+3. Return STRICTLY a valid JSON object with keys:
+   - "subject": polished subject line
+   - "body": polished email body
+Output ONLY the JSON object without markdown code blocks or preamble.
+
+User Input:
+Subject: {payload.subject}
+Body:
+{payload.body}
+"""
+    try:
+        url = "https://api.groq.com/openai/v1/chat/completions"
+        headers = {
+            "Authorization": f"Bearer {api_key}",
+            "Content-Type": "application/json",
+            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AI-Mail-Automation/1.0",
+        }
+        data = {
+            "model": settings.GROQ_MODEL or "openai/gpt-oss-120b",
+            "messages": [{"role": "user", "content": prompt}],
+            "max_tokens": 1200,
+            "temperature": 0.3,
+        }
+        req = urllib.request.Request(url, data=json.dumps(data).encode("utf-8"), headers=headers)
+        with urllib.request.urlopen(req, timeout=18) as resp:
+            res = json.loads(resp.read().decode("utf-8"))
+            content = res.get("choices", [{}])[0].get("message", {}).get("content", "").strip()
+            import re
+            m = re.search(r"\{.*\}", content, re.DOTALL)
+            if m:
+                parsed = json.loads(m.group(0))
+                return {
+                    "success": True,
+                    "subject": parsed.get("subject", payload.subject),
+                    "body": parsed.get("body", payload.body),
+                }
+    except Exception as e:
+        return {"success": False, "subject": payload.subject, "body": payload.body, "message": str(e)}
+
+    return {"success": False, "subject": payload.subject, "body": payload.body}

@@ -31,6 +31,12 @@ from .models import (
     utc_now,
 )
 from .real_scraper import scrape_real_companies
+from .company_utils import (
+    extract_domain,
+    normalize_company_name,
+    get_already_contacted_companies,
+    is_company_already_contacted,
+)
 
 
 EMAIL_PREFIXES = ["contact", "info", "hello", "sales", "support", "team", "partnerships"]
@@ -148,11 +154,21 @@ def sync_to_gmail_sent_mail(to_email: str, subject: str, body: str, config: Opti
     sender_name = config.sender_name or imap_user
 
     try:
-        msg = MIMEText(body, "plain", "utf-8")
-        msg["From"] = f"{sender_name} <{imap_user}>"
-        msg["To"] = to_email
-        msg["Subject"] = subject
-        msg["Date"] = email.utils.formatdate(localtime=True)
+        if "<" in body and ">" in body:
+            msg = MIMEMultipart("alternative")
+            msg["From"] = f"{sender_name} <{imap_user}>"
+            msg["To"] = to_email
+            msg["Subject"] = subject
+            msg["Date"] = email.utils.formatdate(localtime=True)
+            plain_fallback = re.sub(r'<[^>]+>', '', body).strip()
+            msg.attach(MIMEText(plain_fallback, "plain", "utf-8"))
+            msg.attach(MIMEText(body, "html", "utf-8"))
+        else:
+            msg = MIMEText(body, "plain", "utf-8")
+            msg["From"] = f"{sender_name} <{imap_user}>"
+            msg["To"] = to_email
+            msg["Subject"] = subject
+            msg["Date"] = email.utils.formatdate(localtime=True)
 
         with imaplib.IMAP4_SSL(imap_host, imap_port, timeout=10) as mail:
             mail.login(imap_user, imap_pass)
@@ -207,11 +223,17 @@ def dispatch_gmail_smtp(to_email: str, subject: str, body: str, config: Optional
 
     # 1. Attempt live SMTP sending (supports SSL port 465 and TLS port 587/25)
     try:
-        msg = MIMEMultipart()
+        msg = MIMEMultipart("alternative")
         msg["From"] = f"{sender_name} <{smtp_user}>"
         msg["To"] = to_email
         msg["Subject"] = subject
-        msg.attach(MIMEText(body, "plain"))
+
+        if "<" in body and ">" in body:
+            plain_fallback = re.sub(r'<[^>]+>', '', body).strip()
+            msg.attach(MIMEText(plain_fallback, "plain", "utf-8"))
+            msg.attach(MIMEText(body, "html", "utf-8"))
+        else:
+            msg.attach(MIMEText(body, "plain", "utf-8"))
 
         if smtp_port == 465:
             with smtplib.SMTP_SSL(smtp_host, smtp_port, timeout=12) as server:
@@ -378,85 +400,186 @@ def run_scheduler_cycle(
     log(f"Configuration: Query='{query_str}', Scrape Count={scrape_count_target}, Send Count={send_count_target}")
 
     # =========================================================================
-    # STEP 1: SCRAPE THE COMPANIES MAIL ACCOUNTS
+    # STEP 1: SCRAPE THE COMPANIES MAIL ACCOUNTS (1 PER COMPANY GUARANTEE)
     # =========================================================================
     log("▶ STEP 1: Scraping real company mail accounts from verified live web targets...")
+
+    # Retrieve all historically contacted companies to prevent duplicate outreach
+    contacted_emails, contacted_domains, contacted_names = get_already_contacted_companies(db)
+
+    # Retrieve all existing domains and normalized company names currently in DB
+    existing_domains = {extract_domain(r[0]) for r in db.query(CompanyMailAccount.website).all() if r[0]}
+    existing_domains.update({extract_domain(r[0]) for r in db.query(CompanyMailAccount.email).all() if r[0]})
+    existing_names = {normalize_company_name(r[0]) for r in db.query(CompanyMailAccount.company_name).all() if r[0]}
+    existing_emails = {r[0].strip().lower() for r in db.query(CompanyMailAccount.email).all() if r[0]}
+
+    all_exclude_domains = contacted_domains.union(existing_domains)
+    all_exclude_names = contacted_names.union(existing_names)
+
     scraped_accounts_batch = []
-    real_leads = scrape_real_companies(query_str, count=scrape_count_target)
+    real_leads = scrape_real_companies(
+        query_str,
+        count=scrape_count_target,
+        exclude_domains=all_exclude_domains,
+        exclude_names=all_exclude_names,
+    )
 
     for item in real_leads:
-        email_addr = item["email"]
-        existing = db.query(CompanyMailAccount).filter(CompanyMailAccount.email == email_addr).first()
-        if not existing:
-            account = CompanyMailAccount(
-                company_name=item["company_name"],
-                website=item["website"],
-                email=email_addr,
-                industry=item["industry"],
-                city=item["city"],
-                verification_score=item["verification_score"],
-                status="email_found",
-                run_id=current_run.id,
-            )
-            db.add(account)
-            scraped_accounts_batch.append(account)
-        else:
-            domain = item["website"].replace("https://", "").replace("http://", "").replace("www.", "").strip("/")
-            prefix = random.choice(EMAIL_PREFIXES)
-            alt_email = f"{prefix}.team@{domain}"
-            alt_existing = db.query(CompanyMailAccount).filter(CompanyMailAccount.email == alt_email).first()
-            if alt_existing:
-                alt_email = f"lead.{random.randint(10, 999)}@{domain}"
-            account = CompanyMailAccount(
-                company_name=item["company_name"],
-                website=item["website"],
-                email=alt_email,
-                industry=item["industry"],
-                city=item["city"],
-                verification_score=item["verification_score"],
-                status="email_found",
-                run_id=current_run.id,
-            )
-            db.add(account)
-            scraped_accounts_batch.append(account)
+        email_addr = item["email"].strip().lower()
+        dom = extract_domain(item.get("website") or email_addr)
+        norm_name = normalize_company_name(item["company_name"])
+
+        # Strictly verify company is not already in DB or contacted
+        if (email_addr in existing_emails or
+            email_addr in contacted_emails or
+            dom in all_exclude_domains or
+            norm_name in all_exclude_names):
+            continue
+
+        account = CompanyMailAccount(
+            company_name=item["company_name"],
+            website=item["website"],
+            email=email_addr,
+            industry=item["industry"],
+            city=item["city"],
+            verification_score=item["verification_score"],
+            status="email_found",
+            run_id=current_run.id,
+        )
+        db.add(account)
+        scraped_accounts_batch.append(account)
+        existing_emails.add(email_addr)
+        if dom:
+            all_exclude_domains.add(dom)
+        if norm_name:
+            all_exclude_names.add(norm_name)
 
     db.commit()
     scraped_count = len(scraped_accounts_batch)
     current_run.scraped_count = scraped_count
-    log(f"✓ Step 1 Complete: Scraped {scraped_count} real company mail accounts with live websites.")
+    log(f"✓ Step 1 Complete: Scraped {scraped_count} unique verified company accounts (strictly 1 lead per company).")
 
     # =========================================================================
-    # STEP 2: FIND HOW MANY MAIL ACCOUNTS ARE SCRAPED
+    # STEP 2: FIND HOW MANY MAIL ACCOUNTS ARE SCRAPED & READY
     # =========================================================================
     log("▶ STEP 2: Auditing how many mail accounts are scraped & ready in PostgreSQL...")
     total_scraped_accounts = db.query(CompanyMailAccount).count()
     ready_accounts = db.query(CompanyMailAccount).filter(CompanyMailAccount.status == "email_found").count()
     current_run.found_count = scraped_count
-    log(f"✓ Step 2 Complete: Found {scraped_count} mail accounts in this cycle.")
+    log(f"✓ Step 2 Complete: Found {scraped_count} new unique company accounts in this cycle.")
     log(f"  Total Accounts in Database: {total_scraped_accounts} | Available for Outreach: {ready_accounts}")
 
     # =========================================================================
-    # STEP 3: SEND MAILS TO THAT ACCOUNTS
+    # STEP 3: SEND MAILS TO THAT ACCOUNTS (STRICTLY 1 MAIL PER COMPANY)
     # =========================================================================
-    log("▶ STEP 3: Dispatching outreach emails to discovered accounts...")
-    accounts_to_contact = (
+    log("▶ STEP 3: Dispatching outreach emails (Strict Rule: Send only 1 mail per company)...")
+
+    # Reload fresh contacted sets from database
+    contacted_emails, contacted_domains, contacted_names = get_already_contacted_companies(db)
+
+    candidate_accounts = (
         db.query(CompanyMailAccount)
         .filter(CompanyMailAccount.status == "email_found")
         .order_by(
             desc(CompanyMailAccount.run_id == current_run.id),
             desc(CompanyMailAccount.scraped_at)
         )
-        .limit(send_count_target)
         .all()
     )
+
+    accounts_to_contact = []
+    seen_batch_domains = set()
+    seen_batch_names = set()
+
+    for acc in candidate_accounts:
+        acc_email = acc.email.strip().lower()
+        acc_dom = extract_domain(acc.website) or extract_domain(acc_email)
+        acc_norm = normalize_company_name(acc.company_name)
+
+        # 1. Did this company already receive an outreach email previously?
+        if is_company_already_contacted(
+            acc.company_name, acc.website, acc_email,
+            contacted_emails, contacted_domains, contacted_names
+        ):
+            acc.status = "already_contacted"
+            log(f"  ⏭️ Skipping {acc.company_name} ({acc_email}): Company was already sent an outreach mail.")
+            continue
+
+        # 2. Does another account in THIS BATCH belong to the same company?
+        if (acc_dom and acc_dom in seen_batch_domains) or (acc_norm and acc_norm in seen_batch_names):
+            acc.status = "duplicate_skipped"
+            log(f"  ⏭️ Skipping duplicate account in batch: {acc.company_name} ({acc_dom}).")
+            continue
+
+        # Safe to contact!
+        accounts_to_contact.append(acc)
+        if acc_dom:
+            seen_batch_domains.add(acc_dom)
+        if acc_norm:
+            seen_batch_names.add(acc_norm)
+
+        if len(accounts_to_contact) >= send_count_target:
+            break
+
+    # If all ready accounts were already contacted, scrape brand new uncontacted companies on the fly!
+    if len(accounts_to_contact) < send_count_target:
+        needed = send_count_target - len(accounts_to_contact)
+        fresh_leads = scrape_real_companies(
+            query_str,
+            count=needed,
+            exclude_domains=contacted_domains.union(seen_batch_domains),
+            exclude_names=contacted_names.union(seen_batch_names),
+        )
+        for item in fresh_leads:
+            new_em = item["email"].strip().lower()
+            new_dom = extract_domain(item.get("website") or new_em)
+            new_norm = normalize_company_name(item["company_name"])
+
+            if (new_em in contacted_emails or
+                new_dom in contacted_domains or
+                new_norm in contacted_names or
+                new_dom in seen_batch_domains or
+                new_norm in seen_batch_names):
+                continue
+
+            new_acc = CompanyMailAccount(
+                company_name=item["company_name"],
+                website=item["website"],
+                email=new_em,
+                industry=item["industry"],
+                city=item["city"],
+                verification_score=item["verification_score"],
+                status="email_found",
+                run_id=current_run.id,
+            )
+            db.add(new_acc)
+            accounts_to_contact.append(new_acc)
+            if new_dom:
+                seen_batch_domains.add(new_dom)
+            if new_norm:
+                seen_batch_names.add(new_norm)
+        db.commit()
 
     # Get suppression list emails
     suppressed_emails = set(row[0] for row in db.query(SuppressionList.email).all())
 
     sent_records = []
     for acc in accounts_to_contact:
-        if acc.email in suppressed_emails:
+        acc_email = acc.email.strip().lower()
+        acc_dom = extract_domain(acc.website) or extract_domain(acc_email)
+        acc_norm = normalize_company_name(acc.company_name)
+
+        if acc_email in suppressed_emails:
             log(f"  Skipping {acc.email}: Found in suppression list.")
+            continue
+
+        # Final safety check before dispatch: strictly 1 mail per company
+        if is_company_already_contacted(
+            acc.company_name, acc.website, acc_email,
+            contacted_emails, contacted_domains, contacted_names
+        ):
+            log(f"  🛑 Safety Guard: Skipping {acc.company_name} ({acc.email}) - company already received an email.")
+            acc.status = "already_contacted"
             continue
 
         sender_name = (config.sender_name if config and config.sender_name else None) or (config.smtp_username.split('@')[0] if config and config.smtp_username else "Outreach Specialist")
@@ -490,7 +613,8 @@ def run_scheduler_cycle(
 
         # Check if the user wrote their own custom campaign subject & body
         is_user_custom_copy = bool(
-            target_campaign and target_campaign.email_subject and target_campaign.email_body
+            (target_campaign and target_campaign.email_subject and target_campaign.email_body)
+            or (config and config.email_subject and config.email_body)
         )
 
         if is_user_custom_copy:
@@ -532,6 +656,13 @@ def run_scheduler_cycle(
         db.add(sent_item)
         acc.status = "sent"
         sent_records.append(sent_item)
+
+        # Track to prevent any further outreach to this company
+        contacted_emails.add(acc_email)
+        if acc_dom:
+            contacted_domains.add(acc_dom)
+        if acc_norm:
+            contacted_names.add(acc_norm)
 
     db.commit()
     sent_count = len(sent_records)

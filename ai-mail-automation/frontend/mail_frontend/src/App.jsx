@@ -1,5 +1,34 @@
 import { useState, useEffect, useRef } from 'react'
 import './App.css'
+import RichTextEditor, { ensureHtmlContent } from './RichTextEditor'
+
+const MAIL_PRESETS = [
+  {
+    label: '🚀 B2B Cold Outreach',
+    subject: 'Partnership & Automation Opportunities for {{company_name}}',
+    body: "<p>Hi {{company_name}} Team,</p><p>I came across <b>{{website}}</b> and noticed your work in <i>{{industry}}</i> across {{city}}. Our platform automates B2B email workflows and communication pipelines.</p><p>Would you be open to a brief <b>10-minute demo</b> next week to see how we can reduce manual outreach by 40%?</p><p>Best regards,<br><b>{{sender_name}}</b></p>"
+  },
+  {
+    label: '🤝 Business Collaboration',
+    subject: 'Potential collaboration with {{company_name}} in {{city}}',
+    body: "<p>Hi there,</p><p>I've been following <b>{{company_name}}</b>'s recent growth in {{city}}. We collaborate with leading {{industry}} companies to streamline client engagement and outreach.</p><p>Are you available for a quick chat this Thursday to explore mutual synergies?</p><p>Best,<br><b>{{sender_name}}</b></p>"
+  },
+  {
+    label: '📅 10-Min Demo Request',
+    subject: 'Quick question for {{company_name}} leadership',
+    body: "<p>Hello {{company_name}} Team,</p><p>I checked out <b>{{website}}</b> and was impressed by your execution in the {{industry}} space. We built an automated system specifically helping companies like yours eliminate outreach bottlenecks.</p><p>Would you have <b>10 minutes</b> next Tuesday or Wednesday for a quick look?</p><p>Cheers,<br><b>{{sender_name}}</b></p>"
+  },
+  {
+    label: '🏥 Healthcare & Supplies',
+    subject: 'Supply chain & inventory automation for {{company_name}}',
+    body: "<p>Dear {{company_name}} Management,</p><p>We support healthcare facilities and pharmacies in <b>{{city}}</b> with verified supplier pipelines and automated ordering workflows.</p><p>Could we share a 2-page brief on how we help {{industry}} providers optimize their procurement?</p><p>Warm regards,<br><b>{{sender_name}}</b></p>"
+  },
+  {
+    label: '🏢 Local Business Growth',
+    subject: 'Growth opportunities for {{company_name}} in {{city}}',
+    body: "<p>Hi {{company_name}} Team,</p><p>We are actively working with premier <b>{{industry}}</b> businesses in {{city}} to scale their local outreach and client acquisitions.</p><p>I'd love to share two quick ideas tailored to <b>{{website}}</b>. Do you have 5 minutes this week?</p><p>Best regards,<br><b>{{sender_name}}</b></p>"
+  }
+]
 
 export default function App() {
   // Current active data tab: 'accounts' | 'sent' | 'undelivered' | 'replies' | 'runs'
@@ -65,6 +94,22 @@ export default function App() {
     "{{sender_name}}"
   )
 
+  // Dedicated Mail Editor and Customization state
+  const [isMailEditorOpen, setIsMailEditorOpen] = useState(false)
+  const [editorSubject, setEditorSubject] = useState(
+    'Partnership & Automation Opportunities for {{company_name}}'
+  )
+  const [editorBody, setEditorBody] = useState(
+    "Hi {{company_name}} Team,\n\n" +
+    "I came across {{website}} and noticed your work in {{industry}} across {{city}}. Our platform automates B2B email workflows and communication pipelines.\n\n" +
+    "Would you be open to a 10-minute demo next week?\n\n" +
+    "Best regards,\n" +
+    "{{sender_name}}"
+  )
+  const [isEnhancing, setIsEnhancing] = useState(false)
+  const [enhanceTone, setEnhanceTone] = useState('persuasive')
+  const [isSavingTemplate, setIsSavingTemplate] = useState(false)
+
   // SMTP Settings modal and configuration state
   const [isSmtpModalOpen, setIsSmtpModalOpen] = useState(false)
   const [smtpHost, setSmtpHost] = useState('smtp.gmail.com')
@@ -78,7 +123,6 @@ export default function App() {
   const [smtpTestResult, setSmtpTestResult] = useState(null)
 
   // Table records state
-  const [isSendingMail, setIsSendingMail] = useState(false)
   const [campaigns, setCampaigns] = useState([])
   const [accounts, setAccounts] = useState([])
   const [sentMails, setSentMails] = useState([])
@@ -367,31 +411,98 @@ export default function App() {
     }
   }
 
-  // Dedicated Send Mail handler
-  const handleSendMail = async (accountId = null) => {
-    setIsSendingMail(true)
-    setFeedbackMsg(accountId ? 'Sending outreach email to company account...' : 'Sending outreach emails...')
+
+  // Render live preview replacing placeholders with simulated lead data
+  const renderLivePreview = (text) => {
+    if (!text) return ''
+    // If only empty HTML tags or spaces, return empty string so placeholder shows
+    const stripped = text.replace(/<[^>]+>/g, '').replace(/&nbsp;/g, ' ').trim()
+    if (!stripped) return ''
+
+    const sample = {
+      company_name: 'Apex Innovations',
+      website: 'https://apexinnovate.com',
+      city: 'Chicago, IL',
+      industry: 'Technology & Cloud Solutions',
+      sender_name: status.mailbox?.name || 'Outreach Specialist'
+    }
+    let replaced = text
+      .replace(/\{\{company_name\}\}/g, sample.company_name)
+      .replace(/\{\{website\}\}/g, sample.website)
+      .replace(/\{\{city\}\}/g, sample.city)
+      .replace(/\{\{industry\}\}/g, sample.industry)
+      .replace(/\{\{sender_name\}\}/g, sample.sender_name)
+
+    // If plain text (does not contain html tags), wrap paragraphs in <p>
+    if (!/<(p|div|br|b|i|u|h1|h2|h3|ul|ol|li|blockquote|a)[\s>]/i.test(replaced)) {
+      replaced = replaced
+        .split(/\n\n+/)
+        .map((p) => `<p>${p.replace(/\n/g, '<br>')}</p>`)
+        .join('')
+    }
+    return replaced
+  }
+
+  // Save email template to backend
+  const handleSaveMailTemplate = async () => {
+    setIsSavingTemplate(true)
     try {
-      const res = await fetch('http://localhost:8000/api/mail/send', {
+      const res = await fetch('http://localhost:8000/api/template/save', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
-          account_id: accountId,
-          count: Number(editSendBatch) || 5,
+          subject: editorSubject,
+          body: editorBody,
+          campaign_id: status.active_campaign?.id || null,
         }),
       })
       const data = await res.json()
       if (res.ok && data.success) {
+        setCampaignSubject(editorSubject)
+        setCampaignBody(editorBody)
         await fetchAllData()
-        setActiveTab('sent')
-        setFeedbackMsg(`✓ ${data.message}`)
+        setIsMailEditorOpen(false)
+        setFeedbackMsg('✓ Email template saved & applied to active outreach!')
       } else {
-        setFeedbackMsg(data.message || 'Failed to send emails.')
+        alert(data.message || 'Failed to save template.')
       }
     } catch {
-      setFeedbackMsg('Error sending email. Please check backend connection.')
+      alert('Error saving email template. Check backend connection.')
     } finally {
-      setIsSendingMail(false)
+      setIsSavingTemplate(false)
+    }
+  }
+
+  // AI enhance email template
+  const handleEnhanceMailTemplate = async () => {
+    if (!editorBody.trim()) {
+      alert('Please enter some text in the body first for AI to enhance.')
+      return
+    }
+    setIsEnhancing(true)
+    setFeedbackMsg('✨ AI is polishing and enhancing your email template...')
+    try {
+      const res = await fetch('http://localhost:8000/api/template/enhance', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          subject: editorSubject || 'Partnership with {{company_name}}',
+          body: editorBody,
+          tone: enhanceTone,
+        }),
+      })
+      const data = await res.json()
+      if (res.ok && data.success) {
+        if (data.subject) setEditorSubject(data.subject)
+        if (data.body) setEditorBody(data.body)
+        setFeedbackMsg('✨ Template enhanced with AI! Review and click "Save & Apply".')
+      } else {
+        setFeedbackMsg(data.message || 'AI enhance encountered an issue.')
+      }
+    } catch {
+      setFeedbackMsg('Failed to enhance template. Check backend.')
+    } finally {
+      setIsEnhancing(false)
     }
   }
 
@@ -644,12 +755,15 @@ export default function App() {
               </button>
 
               <button
-                className="btn-send-mail"
-                disabled={isSendingMail || isTriggering}
-                onClick={() => handleSendMail()}
-                title="Send outreach emails to discovered company accounts right now"
+                className="btn-mail-editor"
+                onClick={() => {
+                  setEditorSubject(campaignSubject)
+                  setEditorBody(campaignBody)
+                  setIsMailEditorOpen(true)
+                }}
+                title="Edit and customize your email subject, body template, and preview"
               >
-                {isSendingMail ? ' Sending Mails...' : ' Send Mail'}
+                ✉️ Mail Editor
               </button>
 
               <button
@@ -661,7 +775,7 @@ export default function App() {
 
               <button
                 className="btn-trigger-now"
-                disabled={isTriggering || isSendingMail}
+                disabled={isTriggering}
                 onClick={handleTriggerNow}
                 title="Execute 5-step cycle immediately without waiting for timer"
               >
@@ -906,7 +1020,7 @@ export default function App() {
                               <strong style={{ fontSize: '13.5px', color: '#f8fafc' }}>{camp.name}</strong>
                               {camp.is_active && (
                                 <span className="campaign-active-pill" title="This campaign is currently active in the background scheduler">
-                                   ACTIVE
+                                   ACTIVATE CAMPAIGN
                                 </span>
                               )}
                             </div>
@@ -975,16 +1089,9 @@ export default function App() {
                   <div className="no-data-icon"></div>
                   <h4 className="no-data-title">No Scraped Accounts Yet</h4>
                   <p className="no-data-hint">
-                    Click <strong>" Send Mail"</strong> or <strong>" Run Cycle Now"</strong> above to scrape company mail accounts and dispatch outreach emails automatically.
+                    Click <strong>" Run Cycle Now"</strong> above to scrape verified company mail accounts and dispatch outreach emails automatically.
                   </p>
                   <div style={{ display: 'flex', gap: '10px', marginTop: '14px', justifyContent: 'center' }}>
-                    <button
-                      className="btn-send-mail"
-                      disabled={isSendingMail}
-                      onClick={() => handleSendMail()}
-                    >
-                      {isSendingMail ? ' Sending...' : ' Send Mail Now'}
-                    </button>
                     <button
                       className="btn-trigger-now"
                       disabled={isTriggering}
@@ -1004,14 +1111,6 @@ export default function App() {
                       <span>•</span>
                       <span>Contacted: <strong style={{ color: '#34d399' }}>{accounts.filter(a => a.status === 'sent' || a.status === 'replied').length}</strong></span>
                     </div>
-                    <button
-                      className="btn-send-mail-small"
-                      disabled={isSendingMail}
-                      onClick={() => handleSendMail()}
-                      title="Send emails to discovered accounts"
-                    >
-                      {isSendingMail ? ' Sending Mails...' : ' Send Mail to Accounts'}
-                    </button>
                   </div>
 
                   <table className="outreach-table">
@@ -1026,7 +1125,7 @@ export default function App() {
                         <th>Score</th>
                         <th>Status</th>
                         <th>Scraped Date</th>
-                        <th style={{ textAlign: 'right' }}>Action</th>
+                        <th style={{ textAlign: 'right' }}>Outreach State</th>
                       </tr>
                     </thead>
                     <tbody>
@@ -1057,17 +1156,9 @@ export default function App() {
                           <td style={{ color: '#94a3b8' }}>{acc.scraped_at}</td>
                           <td style={{ textAlign: 'right' }}>
                             {acc.status === 'email_found' ? (
-                              <button
-                                className="btn-row-send-mail"
-                                disabled={isSendingMail}
-                                onClick={(e) => {
-                                  e.stopPropagation()
-                                  handleSendMail(acc.id)
-                                }}
-                                title={`Send outreach email directly to ${acc.email}`}
-                              >
-                                 Send
-                              </button>
+                              <span style={{ color: '#38bdf8', fontSize: '12px', fontWeight: 600 }}>
+                                 In Queue
+                              </span>
                             ) : (
                               <span className="text-sent-done">✓ Sent</span>
                             )}
@@ -1086,7 +1177,6 @@ export default function App() {
               const filteredReady = filterRows(readyList)
               return filteredReady.length === 0 ? (
                 <div className="no-data-box">
-                  <div className="no-data-icon">⚡</div>
                   <h4 className="no-data-title">No Accounts in Outreach Queue</h4>
                   <p className="no-data-hint">
                     {readyList.length === 0 && accounts.length > 0
@@ -1099,7 +1189,7 @@ export default function App() {
                       disabled={isTriggering}
                       onClick={handleTriggerNow}
                     >
-                      ⚡ Run Cycle Now to Scrape More Leads
+                       Run Cycle Now to Scrape More Leads
                     </button>
                   </div>
                 </div>
@@ -1107,20 +1197,17 @@ export default function App() {
                 <div>
                   <div className="accounts-table-toolbar" style={{ borderLeft: '3px solid #38bdf8' }}>
                     <div className="accounts-toolbar-info">
-                      <span style={{ color: '#38bdf8', fontWeight: 600 }}>⚡ Step 2 Outreach Queue (Audited Accounts)</span>
+                      <span style={{ color: '#38bdf8', fontWeight: 600 }}>Outreach Queue (Audited Accounts)</span>
                       <span>•</span>
                       <span>Ready to Send: <strong style={{ color: '#38bdf8' }}>{readyList.length}</strong></span>
-                      {/* <span>•</span>
-                      <span style={{ color: '#94a3b8' }}>Audited in PostgreSQL, standing by for Step 3 email dispatch</span> */}
+                      <span>•</span>
+                      <span style={{ background: 'rgba(16, 185, 129, 0.15)', color: '#34d399', padding: '2px 8px', borderRadius: '4px', fontSize: '11px', fontWeight: 600, border: '1px solid rgba(16, 185, 129, 0.3)' }}>
+                         1 Mail Per Company Enforced
+                      </span>
                     </div>
-                    <button
-                      className="btn-send-mail-small"
-                      disabled={isSendingMail}
-                      onClick={() => handleSendMail()}
-                      title="Dispatch emails to all ready accounts"
-                    >
-                      {isSendingMail ? ' Sending Mails...' : ` Send to Ready Accounts (${readyList.length})`}
-                    </button>
+                    <span style={{ fontSize: '12px', color: '#94a3b8', fontWeight: 500 }}>
+                       Automatically sent during campaign run
+                    </span>
                   </div>
 
                   <table className="outreach-table">
@@ -1134,7 +1221,7 @@ export default function App() {
                         <th>Industry Niche</th>
                         <th>Quality</th>
                         <th>Queue Status</th>
-                        <th style={{ textAlign: 'right' }}>Direct Action</th>
+                        <th style={{ textAlign: 'right' }}>Automation Status</th>
                       </tr>
                     </thead>
                     <tbody>
@@ -1167,21 +1254,13 @@ export default function App() {
                           </td>
                           <td>
                             <span className="status-chip email_found" style={{ background: 'rgba(56, 189, 248, 0.15)', color: '#38bdf8', border: '1px solid rgba(56, 189, 248, 0.3)' }}>
-                              ⚡ Ready for Outreach
+                               Ready for Outreach
                             </span>
                           </td>
                           <td style={{ textAlign: 'right' }}>
-                            <button
-                              className="btn-row-send-mail"
-                              disabled={isSendingMail}
-                              onClick={(e) => {
-                                e.stopPropagation()
-                                handleSendMail(acc.id)
-                              }}
-                              title={`Send outreach email directly to ${acc.email}`}
-                            >
-                              ✉️ Send
-                            </button>
+                            <span style={{ color: '#38bdf8', fontSize: '12px', fontWeight: 600 }}>
+                               Auto-Dispatches in Cycle
+                            </span>
                           </td>
                         </tr>
                       ))}
@@ -1769,6 +1848,203 @@ export default function App() {
                    Launch &amp; Run Now
                 </button>
               </div>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* ====================================================================
+          MAIL EDITOR & TEMPLATE CUSTOMIZATION MODAL
+          ==================================================================== */}
+      {isMailEditorOpen && (
+        <div className="campaign-modal-backdrop" onClick={() => setIsMailEditorOpen(false)}>
+          <div className="campaign-modal-dialog mail-editor-dialog" onClick={(e) => e.stopPropagation()}>
+            {/* Header */}
+            <div className="campaign-modal-header" style={{ background: 'linear-gradient(180deg, #1e1b4b, #0f172a)' }}>
+              <div className="campaign-header-left">
+                <div className="campaign-icon-badge" style={{ background: 'linear-gradient(135deg, #6366f1, #a855f7)', color: '#fff' }}>
+                  ✉️
+                </div>
+                <div>
+                  <h3 className="campaign-modal-title">Mail Editor & Template Customizer</h3>
+                  <p className="campaign-modal-subtitle">
+                    Customize the exact email subject, body message, and variable tags sent to companies.
+                  </p>
+                </div>
+              </div>
+              <button
+                type="button"
+                className="campaign-close-x-btn"
+                onClick={() => setIsMailEditorOpen(false)}
+                title="Close"
+              >
+                ✕
+              </button>
+            </div>
+
+            {/* Body */}
+            <div className="campaign-modal-body">
+              {/* Presets Strip */}
+              <div>
+                <span style={{ fontSize: '12px', fontWeight: 600, color: '#94a3b8', display: 'block', marginBottom: '8px' }}>
+                   Quick Load Proven Templates:
+                </span>
+                <div className="template-presets-grid">
+                  {MAIL_PRESETS.map((preset) => (
+                    <button
+                      key={preset.label}
+                      type="button"
+                      className="preset-template-btn"
+                      onClick={() => {
+                        setEditorSubject(preset.subject)
+                        setEditorBody(preset.body)
+                      }}
+                      title="Load this template into editor"
+                    >
+                      {preset.label}
+                    </button>
+                  ))}
+                </div>
+              </div>
+
+              {/* Two Column Grid: Editor (Left) & Live Preview (Right) */}
+              <div className="mail-editor-grid">
+                {/* LEFT: EDIT PANE */}
+                <div className="editor-pane">
+                  <div className="pane-section-title">
+                    <span>✏️</span>
+                    <span>Edit Email Template</span>
+                  </div>
+
+                  {/* Subject Line */}
+                  <div className="form-group">
+                    <label className="form-label">Email Subject Line</label>
+                    <input
+                      type="text"
+                      className="campaign-form-input"
+                      value={editorSubject}
+                      onChange={(e) => setEditorSubject(e.target.value)}
+                      placeholder="e.g. Partnership & Automation Opportunities for {{company_name}}"
+                    />
+                  </div>
+
+                  {/* React Rich Text Editor Component for Email Body */}
+                  <div className="form-group" style={{ marginBottom: '14px' }}>
+                    <label className="form-label">Email Message Body</label>
+                    <RichTextEditor
+                      value={editorBody}
+                      onChange={setEditorBody}
+                      placeholder="Compose your outreach message body..."
+                      minHeight="260px"
+                    />
+                  </div>
+
+                  {/* AI Enhancement Toolbar */}
+                  <div className="ai-enhance-bar">
+                    <div className="ai-enhance-controls">
+                      <span style={{ fontSize: '12px', fontWeight: 600, color: '#e2e8f0' }}>AI Polisher:</span>
+                      <select
+                        className="ai-tone-select"
+                        value={enhanceTone}
+                        onChange={(e) => setEnhanceTone(e.target.value)}
+                      >
+                        <option value="persuasive">Persuasive (High Conversion)</option>
+                        <option value="professional">Professional & Formal</option>
+                        <option value="friendly">Friendly & Casual</option>
+                        <option value="short and concise">Short & Direct (under 60 words)</option>
+                      </select>
+                    </div>
+                    <button
+                      type="button"
+                      className="btn-ai-enhance"
+                      disabled={isEnhancing}
+                      onClick={handleEnhanceMailTemplate}
+                      title="Use Groq LLM to polish and upgrade your copy"
+                    >
+                      {isEnhancing ? ' Enhancing...' : '✨ Polish with AI'}
+                    </button>
+                  </div>
+                </div>
+
+                {/* RIGHT: LIVE RECIPIENT PREVIEW */}
+                <div className="preview-pane">
+                  <div className="pane-section-title">
+                    <span>👁️</span>
+                    <span>Live Recipient View</span>
+                  </div>
+
+                  <div className="email-client-card">
+                    <div className="email-client-header">
+                      <div className="window-dots">
+                        <span className="dot red"></span>
+                        <span className="dot yellow"></span>
+                        <span className="dot green"></span>
+                      </div>
+                      <span style={{ fontSize: '11px', color: '#94a3b8', fontWeight: 600 }}>Simulated Recipient Inbox</span>
+                    </div>
+
+                    <div className="email-meta-strip">
+                      <div className="email-meta-line">
+                        <span className="meta-label">From:</span>
+                        <span className="meta-value" style={{ color: '#38bdf8' }}>
+                          {status.mailbox?.name ? `${status.mailbox.name} <${status.mailbox.email}>` : (status.mailbox?.email || 'chovatiyajanki1913@gmail.com')}
+                        </span>
+                      </div>
+                      <div className="email-meta-line">
+                        <span className="meta-label">To:</span>
+                        <span className="meta-value">contact@apexinnovate.com (Lead)</span>
+                      </div>
+                      <div className="email-meta-line">
+                        <span className="meta-label">Subject:</span>
+                        <span className="meta-subject">
+                          {renderLivePreview(editorSubject) || '(No subject entered)'}
+                        </span>
+                      </div>
+                    </div>
+
+                    <div
+                      className="email-body-preview"
+                      dangerouslySetInnerHTML={{
+                        __html: renderLivePreview(editorBody) || '<span style="color:#64748b;">Start typing in the editor on the left to see your email rendered here in real time...</span>'
+                      }}
+                    />
+
+                    <div style={{ padding: '10px 16px', background: '#080d19', borderTop: '1px solid #1e293b', fontSize: '11.5px', color: '#94a3b8' }}>
+                      💡 <strong>Live Test Sample:</strong> Variables like <code>{"{{company_name}}"}</code>, <code>{"{{city}}"}</code>, <code>{"{{website}}"}</code> are automatically substituted with each target company's real data upon dispatch.
+                    </div>
+                  </div>
+                </div>
+              </div>
+            </div>
+
+            {/* Footer */}
+            <div className="campaign-modal-footer">
+              <button
+                type="button"
+                className="campaign-cancel-btn"
+                onClick={() => setIsMailEditorOpen(false)}
+              >
+                Cancel
+              </button>
+              <button
+                type="button"
+                className="btn-campaign-save-only"
+                onClick={() => {
+                  setEditorSubject('Partnership & Automation Opportunities for {{company_name}}')
+                  setEditorBody("Hi {{company_name}} Team,\n\nI came across {{website}} and noticed your work in {{industry}} across {{city}}. Our platform automates B2B email workflows and communication pipelines.\n\nWould you be open to a 10-minute demo next week?\n\nBest regards,\n{{sender_name}}")
+                }}
+              >
+                ↺ Reset Default
+              </button>
+              <button
+                type="button"
+                className="btn-campaign-launch"
+                style={{ background: 'linear-gradient(135deg, #4f46e5 0%, #7c3aed 100%)' }}
+                disabled={isSavingTemplate}
+                onClick={handleSaveMailTemplate}
+              >
+                {isSavingTemplate ? 'Saving...' : '✓ Save & Apply Template'}
+              </button>
             </div>
           </div>
         </div>

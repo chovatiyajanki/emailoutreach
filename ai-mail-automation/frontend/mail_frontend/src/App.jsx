@@ -398,7 +398,7 @@ export default function App() {
 
   // Fresh start: wipe all data in database
   const handleResetAllData = async () => {
-    if (!window.confirm('Fresh Start: Delete all records in PostgreSQL? This resets total runs to 0.')) {
+    if (!window.confirm('Fresh Start: Delete all records in DataBase? This resets total runs to 0.')) {
       return
     }
     try {
@@ -693,7 +693,7 @@ export default function App() {
             <div className="node-content">
               <span className="node-step-tag">Step 1</span>
               <span className="node-title">Scrape Accounts</span>
-              <span className="node-count">{status.summary.step_1_scraped_accounts} companies</span>
+              <span className="node-count">{status.summary.step_1_scraped_accounts} scraped</span>
             </div>
           </div>
 
@@ -701,14 +701,14 @@ export default function App() {
 
           {/* STEP 2: FIND COUNT */}
           <div
-            className={`pipeline-step-node ${activeTab === 'accounts' ? 'selected' : ''}`}
-            onClick={() => setActiveTab('accounts')}
+            className={`pipeline-step-node ${activeTab === 'ready' ? 'selected' : ''}`}
+            onClick={() => setActiveTab('ready')}
           >
             {/* <div className="node-icon-circle step-2">📊</div> */}
             <div className="node-content">
               <span className="node-step-tag">Step 2</span>
-              <span className="node-title">Find Accounts</span>
-              <span className="node-count">{status.summary.step_2_found_accounts} discovered</span>
+              <span className="node-title">Ready for Outreach</span>
+              <span className="node-count">{status.summary.step_2_found_accounts} ready to send</span>
             </div>
           </div>
 
@@ -778,6 +778,16 @@ export default function App() {
               >
                 <span> Scraped Accounts</span>
                 <span className="tab-badge">{accounts.length}</span>
+              </button>
+
+              <button
+                className={`tab-pill-btn ${activeTab === 'ready' ? 'active' : ''}`}
+                onClick={() => setActiveTab('ready')}
+              >
+                <span> Ready for Outreach</span>
+                <span className="tab-badge" style={{ background: '#0284c7', color: '#fff' }}>
+                  {accounts.filter(a => a.status === 'email_found').length}
+                </span>
               </button>
 
               <button
@@ -907,10 +917,10 @@ export default function App() {
                           </td>
                           <td>
                             <span className={`run-count-badge ${camp.total_runs > 0 ? 'has-runs' : 'zero-runs'}`}>
-                              🚀 {camp.total_runs} {camp.total_runs === 1 ? 'run' : 'runs'}
+                               {camp.total_runs} {camp.total_runs === 1 ? 'run' : 'runs'}
                             </span>
                           </td>
-                          <td style={{ fontWeight: 600, color: '#34d399' }}>{camp.total_leads_scraped || 0}</td>
+                          <td style={{ fontWeight: 600, color: '#34d399'   }}>{camp.total_leads_scraped || 0}</td>
                           <td style={{ fontWeight: 600, color: '#60a5fa' }}>{camp.total_emails_sent || 0}</td>
                           <td style={{ fontWeight: 600, color: '#f472b6' }}>{camp.total_replies || 0}</td>
                           <td style={{ fontSize: '12px', color: '#94a3b8' }}>
@@ -1069,6 +1079,117 @@ export default function App() {
                 </div>
               )
             )}
+
+            {/* TAB: READY FOR OUTREACH QUEUE (STEP 2 DEDICATED TABLE) */}
+            {activeTab === 'ready' && (() => {
+              const readyList = accounts.filter(a => a.status === 'email_found')
+              const filteredReady = filterRows(readyList)
+              return filteredReady.length === 0 ? (
+                <div className="no-data-box">
+                  <div className="no-data-icon">⚡</div>
+                  <h4 className="no-data-title">No Accounts in Outreach Queue</h4>
+                  <p className="no-data-hint">
+                    {readyList.length === 0 && accounts.length > 0
+                      ? 'All scraped accounts have already been emailed! Click "Run Cycle Now" or enter a new search query to scrape fresh leads.'
+                      : 'No mail accounts discovered yet. Click "Run Cycle Now" or enter a search query above to scrape leads.'}
+                  </p>
+                  <div style={{ display: 'flex', gap: '10px', marginTop: '14px', justifyContent: 'center' }}>
+                    <button
+                      className="btn-trigger-now"
+                      disabled={isTriggering}
+                      onClick={handleTriggerNow}
+                    >
+                      ⚡ Run Cycle Now to Scrape More Leads
+                    </button>
+                  </div>
+                </div>
+              ) : (
+                <div>
+                  <div className="accounts-table-toolbar" style={{ borderLeft: '3px solid #38bdf8' }}>
+                    <div className="accounts-toolbar-info">
+                      <span style={{ color: '#38bdf8', fontWeight: 600 }}>⚡ Step 2 Outreach Queue (Audited Accounts)</span>
+                      <span>•</span>
+                      <span>Ready to Send: <strong style={{ color: '#38bdf8' }}>{readyList.length}</strong></span>
+                      {/* <span>•</span>
+                      <span style={{ color: '#94a3b8' }}>Audited in PostgreSQL, standing by for Step 3 email dispatch</span> */}
+                    </div>
+                    <button
+                      className="btn-send-mail-small"
+                      disabled={isSendingMail}
+                      onClick={() => handleSendMail()}
+                      title="Dispatch emails to all ready accounts"
+                    >
+                      {isSendingMail ? ' Sending Mails...' : ` Send to Ready Accounts (${readyList.length})`}
+                    </button>
+                  </div>
+
+                  <table className="outreach-table">
+                    <thead>
+                      <tr>
+                        <th className="th-num">#</th>
+                        <th>Target Company</th>
+                        <th>Audited Email</th>
+                        <th>Location (City/Country)</th>
+                        <th>Website</th>
+                        <th>Industry Niche</th>
+                        <th>Quality</th>
+                        <th>Queue Status</th>
+                        <th style={{ textAlign: 'right' }}>Direct Action</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {filteredReady.map((acc, idx) => (
+                        <tr key={acc.id} onClick={() => setSelectedRecord({ type: 'account', data: acc })}>
+                          <td className="td-num">{idx + 1}</td>
+                          <td style={{ fontWeight: 600, color: '#f8fafc' }}>{acc.company_name}</td>
+                          <td style={{ color: '#38bdf8', fontWeight: 600 }}>{acc.email}</td>
+                          <td>
+                            <span style={{ background: 'rgba(99, 102, 241, 0.15)', color: '#a5b4fc', padding: '3px 8px', borderRadius: '4px', fontSize: '12px' }}>
+                              📍 {acc.city || 'Global'}
+                            </span>
+                          </td>
+                          <td>
+                            <a
+                              href={acc.website}
+                              target="_blank"
+                              rel="noreferrer"
+                              style={{ color: '#818cf8', textDecoration: 'none' }}
+                              onClick={(e) => e.stopPropagation()}
+                            >
+                              {acc.website}
+                            </a>
+                          </td>
+                          <td>{acc.industry}</td>
+                          <td>
+                            <span style={{ color: '#34d399', fontWeight: 600 }}>
+                              {acc.verification_score}/100
+                            </span>
+                          </td>
+                          <td>
+                            <span className="status-chip email_found" style={{ background: 'rgba(56, 189, 248, 0.15)', color: '#38bdf8', border: '1px solid rgba(56, 189, 248, 0.3)' }}>
+                              ⚡ Ready for Outreach
+                            </span>
+                          </td>
+                          <td style={{ textAlign: 'right' }}>
+                            <button
+                              className="btn-row-send-mail"
+                              disabled={isSendingMail}
+                              onClick={(e) => {
+                                e.stopPropagation()
+                                handleSendMail(acc.id)
+                              }}
+                              title={`Send outreach email directly to ${acc.email}`}
+                            >
+                              ✉️ Send
+                            </button>
+                          </td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              )
+            })()}
 
             {/* TAB 2: SENT MAILS */}
             {activeTab === 'sent' && (
@@ -1415,25 +1536,27 @@ export default function App() {
                 </div>
 
                 <div className="form-group" style={{ marginTop: '8px' }}>
-                  <label className="form-label">Search Query (Industry or Target Domain)</label>
+                  <label className="form-label">Search Query (City, Country, Industry, or Website Domain)</label>
                   <input
                     type="text"
                     className="campaign-form-input"
                     value={editQuery}
                     onChange={(e) => setEditQuery(e.target.value)}
-                    placeholder="e.g. Medical stores, Pharmacies, Hospitals, Real estate..."
+                    placeholder="e.g. IT companies in India, Dentists in Chicago, Real estate in Dubai, Ahmedabad software..."
                   />
 
                   {/* Quick Preset Pills */}
                   <div className="quick-presets-strip">
                     <span className="presets-label">Popular Targets:</span>
                     {[
-                      { label: 'Medical stores', query: 'Medical stores', name: 'Medical Stores Outreach Campaign' },
-                      { label: 'Pharmacies', query: 'Pharmacies', name: 'Pharmacy Retail Outreach Campaign' },
-                      { label: 'Hospitals', query: 'Hospitals', name: 'Hospital & Healthcare Campaign' },
-                      { label: 'Real estate', query: 'Real estate', name: 'Real Estate Brokerage Campaign' },
-                      { label: 'Restaurants', query: 'Restaurants', name: 'Restaurant & Dining Campaign' },
-                      { label: 'B2B SaaS', query: 'B2B Software and Tech Companies', name: 'B2B SaaS Outreach Campaign' },
+                      { label: '🇮🇳 IT in India', query: 'IT companies in India', name: 'India IT Companies Outreach' },
+                      { label: '🇺🇸 Dentists in Chicago', query: 'Dentists in Chicago', name: 'Chicago Dentists Outreach' },
+                      { label: '🇺🇸 Software in USA', query: 'Software companies in USA', name: 'USA Software Companies Campaign' },
+                      { label: '🇦🇪 Real Estate Dubai', query: 'Real estate in Dubai', name: 'Dubai Real Estate Campaign' },
+                      { label: '🇮🇳 Ahmedabad Software', query: 'Ahmedabad software companies', name: 'Ahmedabad Tech Outreach' },
+                      { label: '🇮🇳 Surat Textile', query: 'Surat textile', name: 'Surat Textile Industry Campaign' },
+                      { label: '🇨🇦 Canada Agencies', query: 'Marketing agencies in Canada', name: 'Canada Marketing Agencies Campaign' },
+                      { label: '🏥 Medical stores', query: 'Medical stores', name: 'Medical Stores Outreach Campaign' },
                     ].map((preset) => (
                       <button
                         key={preset.query}

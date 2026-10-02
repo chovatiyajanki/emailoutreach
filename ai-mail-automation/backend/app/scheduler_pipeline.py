@@ -488,22 +488,31 @@ def run_scheduler_cycle(
             .replace("{{sender_name}}", sender_name)
         )
 
-        # Generate hyper-personalized email via Groq LLM (falls back to base template if unavailable)
-        ai_subj, ai_body, is_ai_generated = generate_ai_personalized_email(
-            company_name=acc.company_name,
-            website=acc.website,
-            industry=acc.industry,
-            city=acc.city,
-            base_subject=base_subj,
-            base_body=base_body,
-            sender_name=sender_name,
+        # Check if the user wrote their own custom campaign subject & body
+        is_user_custom_copy = bool(
+            target_campaign and target_campaign.email_subject and target_campaign.email_body
         )
 
-        subj = ai_subj if is_ai_generated else base_subj
-        body = ai_body if is_ai_generated else base_body
-
-        if is_ai_generated:
-            log(f"  ✨ [Groq AI: {settings.GROQ_MODEL}] Personalized email crafted for {acc.company_name}")
+        if is_user_custom_copy:
+            # User wrote their own specific subject and message: Send 100% of their exact words!
+            subj = base_subj
+            body = base_body
+            log(f"  ✉️ Dispatching campaign email to {acc.email}: \"{subj}\"")
+        else:
+            # Default or unconfigured copy: Use Groq AI to draft a personalized message
+            ai_subj, ai_body, is_ai_generated = generate_ai_personalized_email(
+                company_name=acc.company_name,
+                website=acc.website,
+                industry=acc.industry,
+                city=acc.city,
+                base_subject=base_subj,
+                base_body=base_body,
+                sender_name=sender_name,
+            )
+            subj = ai_subj if is_ai_generated else base_subj
+            body = ai_body if is_ai_generated else base_body
+            if is_ai_generated:
+                log(f"  ✨ [Groq AI: {settings.GROQ_MODEL}] Personalized email crafted for {acc.company_name}")
 
         # Dispatch live via configured SMTP and sync to Gmail Sent Mailbox if Gmail
         live_sent, delivery_note = dispatch_gmail_smtp(acc.email, subj, body, config=config)
@@ -584,14 +593,26 @@ def run_scheduler_cycle(
     real_replies = check_inbound_gmail_replies(config=config)
     if real_replies:
         for rr in real_replies:
+            clean_from_match = re.search(r'[\w\.-]+@[\w\.-]+', rr["from_email"])
+            from_addr = clean_from_match.group(0).lower() if clean_from_match else rr["from_email"].lower()
+
+            matching_sent = db.query(SentMail).filter(SentMail.to_email.ilike(f"%{from_addr}%")).first()
+            if matching_sent:
+                matching_sent.status = "replied"
+
+            comp_acc = db.query(CompanyMailAccount).filter(CompanyMailAccount.email.ilike(f"%{from_addr}%")).first()
+            if comp_acc:
+                comp_acc.status = "replied"
+
             reply_obj = MailReply(
+                sent_mail_id=matching_sent.id if matching_sent else None,
                 from_email=rr["from_email"],
                 to_email=sender_email,
                 subject=rr["subject"],
                 body=rr["body"],
                 has_reply=True,
                 sentiment="Interested",
-                ai_summary="Positive interest in workflow partnership demo.",
+                ai_summary="Incoming response received in Gmail inbox.",
                 received_at=utc_now(),
                 run_id=current_run.id,
             )
@@ -599,8 +620,9 @@ def run_scheduler_cycle(
             replies_found.append(reply_obj)
             log(f"  💬 Real Gmail reply detected from <{rr['from_email']}>: '{rr['subject']}'")
 
-    # 2. If no real reply and we sent emails, generate realistic lead reply simulation
-    if not replies_found and sent_records and random.random() < 0.55:
+    # 2. Only in offline sandbox demo mode (when live SMTP is NOT configured), provide demo simulation
+    has_live_smtp = bool(config and config.smtp_username and config.smtp_password)
+    if not replies_found and sent_records and not has_live_smtp and random.random() < 0.40:
         reply_target = random.choice([s for s in sent_records if s.status == "sent"] or sent_records)
         sample_responses = [
             ("Interested", f"Hi {recipient_salutation}, thanks for reaching out. We are currently evaluating automation tools. Could you send over a brief deck or schedule a quick call?"),
@@ -631,7 +653,7 @@ def run_scheduler_cycle(
                 comp_acc.status = "replied"
 
         replies_found.append(reply_obj)
-        log(f"  💬 Reply detected from <{reply_target.to_email}>: Intent='{sentiment}'")
+        log(f"  💬 [Sandbox Demo] Reply detected from <{reply_target.to_email}>: Intent='{sentiment}'")
 
         # Synchronize reply directly to Gmail INBOX so it is visible in the user's Gmail mailbox!
         sync_to_gmail_inbox(reply_target.to_email, reply_obj.subject, reply_obj.body)

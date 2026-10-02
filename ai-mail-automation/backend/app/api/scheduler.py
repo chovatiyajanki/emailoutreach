@@ -27,6 +27,7 @@ from ..scheduler_pipeline import (
     generate_ai_personalized_email,
 )
 from ..config import settings
+from ..real_scraper import scrape_real_companies
 import random
 
 router = APIRouter(
@@ -297,18 +298,26 @@ def manual_send_emails(payload: Optional[SendMailRequest] = None, db: Session = 
             .replace("{{sender_name}}", sender_name)
         )
 
-        ai_subj, ai_body, is_ai = generate_ai_personalized_email(
-            company_name=acc.company_name,
-            website=acc.website,
-            industry=acc.industry,
-            city=acc.city,
-            base_subject=base_subj,
-            base_body=base_body,
-            sender_name=sender_name,
+        # Check if the user wrote their own custom campaign subject & body
+        is_user_custom_copy = bool(
+            target_campaign and target_campaign.email_subject and target_campaign.email_body
         )
 
-        subj = ai_subj if is_ai else base_subj
-        body = ai_body if is_ai else base_body
+        if is_user_custom_copy:
+            subj = base_subj
+            body = base_body
+        else:
+            ai_subj, ai_body, is_ai = generate_ai_personalized_email(
+                company_name=acc.company_name,
+                website=acc.website,
+                industry=acc.industry,
+                city=acc.city,
+                base_subject=base_subj,
+                base_body=base_body,
+                sender_name=sender_name,
+            )
+            subj = ai_subj if is_ai else base_subj
+            body = ai_body if is_ai else base_body
 
         live_sent, delivery_note = dispatch_gmail_smtp(acc.email, subj, body, config=config)
         delivery_mode = "live_smtp" if "Live" in delivery_note else "smtp_synced"
@@ -403,23 +412,37 @@ def manual_check_replies(db: Session = Depends(get_db)):
     replies_found = []
     real_replies = check_inbound_gmail_replies(config=config)
     if real_replies:
+        import re
         for rr in real_replies:
+            clean_from_match = re.search(r'[\w\.-]+@[\w\.-]+', rr["from_email"])
+            from_addr = clean_from_match.group(0).lower() if clean_from_match else rr["from_email"].lower()
+
+            matching_sent = db.query(SentMail).filter(SentMail.to_email.ilike(f"%{from_addr}%")).first()
+            if matching_sent:
+                matching_sent.status = "replied"
+
+            comp_acc = db.query(CompanyMailAccount).filter(CompanyMailAccount.email.ilike(f"%{from_addr}%")).first()
+            if comp_acc:
+                comp_acc.status = "replied"
+
             reply_obj = MailReply(
+                sent_mail_id=matching_sent.id if matching_sent else None,
                 from_email=rr["from_email"],
                 to_email=sender_email,
                 subject=rr["subject"],
                 body=rr["body"],
                 has_reply=True,
                 sentiment="Interested",
-                ai_summary="Positive interest in workflow partnership demo.",
+                ai_summary="Real response received in Gmail inbox.",
                 received_at=utc_now(),
             )
             db.add(reply_obj)
             replies_found.append(reply_obj)
         db.commit()
 
-    if not replies_found:
-        # Check if sent mails exist to simulate realistic lead response
+    has_live_smtp = bool(config and config.smtp_username and config.smtp_password)
+    if not replies_found and not has_live_smtp:
+        # Check if sent mails exist to simulate realistic lead response in sandbox demo mode
         sent = db.query(SentMail).first()
         if sent:
             reply_obj = MailReply(
@@ -460,6 +483,7 @@ def get_scheduler_status(db: Session = Depends(get_db)):
 
     # Aggregates across PostgreSQL tables
     total_scraped = db.query(func.count(CompanyMailAccount.id)).scalar() or 0
+    ready_accounts = db.query(func.count(CompanyMailAccount.id)).filter(CompanyMailAccount.status == "email_found").scalar() or 0
     total_sent = db.query(func.count(SentMail.id)).scalar() or 0
     total_undelivered = db.query(func.count(UndeliveredMail.id)).scalar() or 0
     total_replies = db.query(func.count(MailReply.id)).scalar() or 0
@@ -499,7 +523,7 @@ def get_scheduler_status(db: Session = Depends(get_db)):
         "total_runs": config.total_runs,
         "summary": {
             "step_1_scraped_accounts": total_scraped,
-            "step_2_found_accounts": total_scraped,
+            "step_2_found_accounts": ready_accounts,
             "step_3_sent_emails": total_sent,
             "step_4_undelivered_emails": total_undelivered,
             "step_5_replies_found": total_replies,

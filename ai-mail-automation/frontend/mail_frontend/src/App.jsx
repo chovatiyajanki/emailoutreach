@@ -1115,7 +1115,13 @@ export default function App() {
                       <span>•</span>
                       <span>Ready for Outreach: <strong style={{ color: '#38bdf8' }}>{accounts.filter(a => a.status === 'email_found').length}</strong></span>
                       <span>•</span>
-                      <span>Contacted: <strong style={{ color: '#34d399' }}>{accounts.filter(a => a.status === 'sent' || a.status === 'replied').length}</strong></span>
+                      <span>Contacted: <strong style={{ color: '#34d399' }}>{accounts.filter(a => a.status === 'sent' || a.status === 'replied' || a.status === 'replies').length}</strong></span>
+                      {accounts.some(a => a.status === 'replies' || a.status === 'replied') && (
+                        <>
+                          <span>•</span>
+                          <span>Replies: <strong style={{ color: '#fbbf24' }}>{accounts.filter(a => a.status === 'replies' || a.status === 'replied').length}</strong></span>
+                        </>
+                      )}
                       {accounts.some(a => a.status === 'blocked_message' || a.status === 'blocked message') && (
                         <>
                           <span>•</span>
@@ -1162,7 +1168,7 @@ export default function App() {
                           <td>{acc.verification_score}/100</td>
                           <td>
                             <span className={`status-chip ${String(acc.status).replace(/\s+/g, '_')}`}>
-                              {acc.status === 'blocked_message' || acc.status === 'blocked message' ? 'blocked message' : acc.status}
+                              {acc.status === 'blocked_message' || acc.status === 'blocked message' ? 'blocked message' : (acc.status === 'replied' ? 'replies' : acc.status)}
                             </span>
                           </td>
                           <td style={{ color: '#94a3b8' }}>{acc.scraped_at}</td>
@@ -1174,6 +1180,10 @@ export default function App() {
                             ) : (acc.status === 'blocked_message' || acc.status === 'blocked message') ? (
                               <span style={{ color: '#f87171', fontSize: '12px', fontWeight: 600 }}>
                                  Blocked
+                              </span>
+                            ) : (acc.status === 'replies' || acc.status === 'replied') ? (
+                              <span style={{ color: '#fbbf24', fontSize: '12px', fontWeight: 600 }}>
+                                💬 Replies
                               </span>
                             ) : (
                               <span className="text-sent-done">✓ Sent</span>
@@ -1321,7 +1331,7 @@ export default function App() {
                         <td>{m.delivery_mode}</td>
                         <td>
                           <span className={`status-chip ${String(m.status).replace(/\s+/g, '_')}`}>
-                            {m.status === 'blocked_message' || m.status === 'blocked message' ? 'blocked message' : m.status}
+                            {m.status === 'blocked_message' || m.status === 'blocked message' ? 'blocked message' : (m.status === 'replied' ? 'replies' : m.status)}
                           </span>
                         </td>
                         <td style={{ color: '#94a3b8' }}>{m.sent_at}</td>
@@ -1502,7 +1512,7 @@ export default function App() {
                 <div className="detail-line">
                   <span className="detail-label">Status</span>
                   <span className={`status-chip ${String(selectedRecord.data.status).replace(/\s+/g, '_')}`}>
-                    {selectedRecord.data.status === 'blocked_message' || selectedRecord.data.status === 'blocked message' ? 'blocked message' : selectedRecord.data.status}
+                    {selectedRecord.data.status === 'blocked_message' || selectedRecord.data.status === 'blocked message' ? 'blocked message' : (selectedRecord.data.status === 'replied' ? 'replies' : selectedRecord.data.status)}
                   </span>
                 </div>
               )}

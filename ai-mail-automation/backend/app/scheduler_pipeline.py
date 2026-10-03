@@ -331,6 +331,24 @@ def dispatch_gmail_smtp(to_email: str, subject: str, body: str, config: Optional
     return is_sent, delivery_note, is_blocked
 
 
+def decode_mime_header(header_value: str) -> str:
+    """Decodes MIME encoded email header fields into a clean unicode string"""
+    if not header_value:
+        return ""
+    try:
+        from email.header import decode_header
+        decoded_parts = decode_header(header_value)
+        result = []
+        for part, enc in decoded_parts:
+            if isinstance(part, bytes):
+                result.append(part.decode(enc or "utf-8", errors="ignore"))
+            else:
+                result.append(str(part))
+        return "".join(result).strip()
+    except Exception:
+        return str(header_value).strip()
+
+
 def check_inbound_gmail_replies(config: Optional[SchedulerConfig] = None) -> List[Dict[str, Any]]:
     """Checks configured mail account via IMAP for recent replies to outreach emails and detects Google message blocked notices"""
     if not config or not config.smtp_username or not config.smtp_password:
@@ -343,22 +361,23 @@ def check_inbound_gmail_replies(config: Optional[SchedulerConfig] = None) -> Lis
 
     replies = []
     try:
-        with imaplib.IMAP4_SSL(imap_host, imap_port, timeout=8) as mail:
+        with imaplib.IMAP4_SSL(imap_host, imap_port, timeout=12) as mail:
             mail.login(imap_user, imap_pass)
             mail.select("INBOX")
-            # Search recent unread or today's emails
+            # Search messages in INBOX
             status, messages = mail.search(None, "ALL")
             if status == "OK" and messages[0]:
                 msg_ids = messages[0].split()
-                # Check last 5 messages
-                for mid in msg_ids[-5:]:
+                # Check recent 30 messages for replies and bounces
+                for mid in msg_ids[-30:]:
                     res, data = mail.fetch(mid, "(RFC822)")
                     if res == "OK":
                         raw = data[0][1]
                         parsed = email.message_from_bytes(raw)
-                        from_hdr = parsed.get("From", "")
-                        subj_hdr = parsed.get("Subject", "")
-                        # Simple body extraction
+                        from_hdr = decode_mime_header(parsed.get("From", ""))
+                        subj_hdr = decode_mime_header(parsed.get("Subject", ""))
+
+                        # Body extraction
                         body_txt = ""
                         if parsed.is_multipart():
                             for part in parsed.walk():
@@ -849,68 +868,100 @@ def run_scheduler_cycle(
 
             clean_from_match = re.search(r'[\w\.-]+@[\w\.-]+', rr["from_email"])
             from_addr = clean_from_match.group(0).lower() if clean_from_match else rr["from_email"].lower()
+            from_domain = extract_domain(from_addr)
 
-            matching_sent = db.query(SentMail).filter(SentMail.to_email.ilike(f"%{from_addr}%")).first()
+            # Match actual company in our outreach database:
+            # 1. Match by exact recipient email
+            matching_sent = db.query(SentMail).filter(SentMail.to_email.ilike(from_addr)).order_by(desc(SentMail.sent_at)).first()
+            comp_acc = None
+            if matching_sent and matching_sent.account_id:
+                comp_acc = db.query(CompanyMailAccount).filter(CompanyMailAccount.id == matching_sent.account_id).first()
+
+            if not comp_acc:
+                comp_acc = db.query(CompanyMailAccount).filter(CompanyMailAccount.email.ilike(from_addr)).first()
+
+            # 2. Match by company domain if exact email didn't match (e.g. sent to contact@acme.com, replied from ceo@acme.com)
+            if not matching_sent and from_domain:
+                all_sent = db.query(SentMail).order_by(desc(SentMail.sent_at)).all()
+                for sm in all_sent:
+                    if extract_domain(sm.to_email) == from_domain:
+                        matching_sent = sm
+                        if sm.account_id and not comp_acc:
+                            comp_acc = db.query(CompanyMailAccount).filter(CompanyMailAccount.id == sm.account_id).first()
+                        break
+
+            if not comp_acc and from_domain:
+                all_accs = db.query(CompanyMailAccount).all()
+                for ca in all_accs:
+                    if (ca.website and extract_domain(ca.website) == from_domain) or (ca.email and extract_domain(ca.email) == from_domain):
+                        comp_acc = ca
+                        if not matching_sent:
+                            matching_sent = db.query(SentMail).filter(SentMail.account_id == ca.id).order_by(desc(SentMail.sent_at)).first()
+                        break
+
+            # 3. Match by subject line reference (e.g., "Re: <outreach subject>")
+            if not matching_sent and rr["subject"].lower().startswith("re:"):
+                clean_subj = re.sub(r'^(re|fwd):\s*', '', rr["subject"], flags=re.IGNORECASE).strip()
+                if clean_subj:
+                    matching_sent = db.query(SentMail).filter(SentMail.subject.ilike(f"%{clean_subj}%")).order_by(desc(SentMail.sent_at)).first()
+                    if matching_sent and matching_sent.account_id and not comp_acc:
+                        comp_acc = db.query(CompanyMailAccount).filter(CompanyMailAccount.id == matching_sent.account_id).first()
+
+            # STRICT RULE: Only when the company ACTUALLY replied to an outreach email!
+            # If this inbox message does not correspond to any contacted company in our database, ignore it.
+            if not matching_sent and not comp_acc:
+                continue
+
+            # Update status to "replies"
             if matching_sent:
-                matching_sent.status = "replied"
+                matching_sent.status = "replies"
 
-            comp_acc = db.query(CompanyMailAccount).filter(CompanyMailAccount.email.ilike(f"%{from_addr}%")).first()
             if comp_acc:
-                comp_acc.status = "replied"
+                comp_acc.status = "replies"
 
-            reply_obj = MailReply(
-                sent_mail_id=matching_sent.id if matching_sent else None,
-                from_email=rr["from_email"],
-                to_email=sender_email,
-                subject=rr["subject"],
-                body=rr["body"],
-                has_reply=True,
-                sentiment="Interested",
-                ai_summary="Incoming response received in Gmail inbox.",
-                received_at=utc_now(),
-                run_id=current_run.id,
+            # Check if this reply was already recorded
+            existing_reply = (
+                db.query(MailReply)
+                .filter(
+                    MailReply.from_email.ilike(f"%{from_addr}%"),
+                    MailReply.subject == rr["subject"]
+                )
+                .first()
             )
-            db.add(reply_obj)
-            replies_found.append(reply_obj)
-            log(f"  💬 Real Gmail reply detected from <{rr['from_email']}>: '{rr['subject']}'")
 
-    # 2. Only in offline sandbox demo mode (when live SMTP is NOT configured), provide demo simulation
-    has_live_smtp = bool(config and config.smtp_username and config.smtp_password)
-    if not replies_found and sent_records and not has_live_smtp and random.random() < 0.40:
-        reply_target = random.choice([s for s in sent_records if s.status == "sent"] or sent_records)
-        sample_responses = [
-            ("Interested", f"Hi {recipient_salutation}, thanks for reaching out. We are currently evaluating automation tools. Could you send over a brief deck or schedule a quick call?"),
-            ("Meeting Requested", f"Hello {recipient_salutation}, sounds relevant to our current quarter initiatives. How does Thursday at 2 PM EST work for a 15-minute intro?"),
-            ("Question", f"Hi {recipient_salutation}, does your platform integrate directly with PostgreSQL and existing CRM APIs? Let me know."),
-            ("Out of Office", "Thank you for your email. I am currently out of office with limited access to email. I will reply upon my return next week."),
-        ]
-        sentiment, reply_text = random.choice(sample_responses)
+            if not existing_reply:
+                reply_lower = (rr["body"] or "").lower()
+                sentiment = "Interested"
+                if any(w in reply_lower for w in ["meeting", "call", "schedule", "calendar", "time to talk"]):
+                    sentiment = "Meeting Requested"
+                elif any(w in reply_lower for w in ["not interested", "unsubscribe", "remove", "stop"]):
+                    sentiment = "Not Interested"
+                elif any(w in reply_lower for w in ["out of office", "vacation", "away from"]):
+                    sentiment = "Out of Office"
 
-        reply_obj = MailReply(
-            sent_mail_id=reply_target.id,
-            from_email=reply_target.to_email,
-            to_email=sender_email,
-            subject=f"Re: {reply_target.subject}",
-            body=reply_text,
-            has_reply=True,
-            sentiment=sentiment,
-            ai_summary=f"Lead expressed: {sentiment}.",
-            received_at=utc_now(),
-            run_id=current_run.id,
-        )
-        db.add(reply_obj)
-        reply_target.status = "replied"
+                reply_obj = MailReply(
+                    sent_mail_id=matching_sent.id if matching_sent else None,
+                    from_email=rr["from_email"],
+                    to_email=sender_email,
+                    subject=rr["subject"],
+                    body=rr["body"],
+                    has_reply=True,
+                    sentiment=sentiment,
+                    ai_summary="Actual inbound response received from company prospect.",
+                    received_at=utc_now(),
+                    run_id=current_run.id,
+                )
+                db.add(reply_obj)
+                replies_found.append(reply_obj)
 
-        if reply_target.account_id:
-            comp_acc = db.query(CompanyMailAccount).filter(CompanyMailAccount.id == reply_target.account_id).first()
-            if comp_acc:
-                comp_acc.status = "replied"
+                if target_campaign:
+                    target_campaign.total_replies += 1
 
-        replies_found.append(reply_obj)
-        log(f"  💬 [Sandbox Demo] Reply detected from <{reply_target.to_email}>: Intent='{sentiment}'")
-
-        # Synchronize reply directly to Gmail INBOX so it is visible in the user's Gmail mailbox!
-        sync_to_gmail_inbox(reply_target.to_email, reply_obj.subject, reply_obj.body)
+                comp_name = comp_acc.company_name if comp_acc else from_addr
+                log(f"  💬 Actual company reply received from {comp_name} <{from_addr}>: \"{rr['subject']}\" (Status: replies)")
+            else:
+                comp_name = comp_acc.company_name if comp_acc else from_addr
+                log(f"  ✓ Confirmed actual company reply from {comp_name} <{from_addr}> (Status: replies).")
 
     db.commit()
     replies_count = len(replies_found)

@@ -667,6 +667,15 @@
   border: 1px solid rgba(239, 68, 68, 0.3);
 }
 
+.status-chip.blocked_message,
+.status-chip.blocked-message,
+.status-chip.blocked {
+  background: rgba(239, 68, 68, 0.22);
+  color: #fca5a5;
+  border: 1px solid rgba(239, 68, 68, 0.5);
+  box-shadow: 0 0 10px rgba(239, 68, 68, 0.2);
+}
+
 .status-chip.replied {
   background: rgba(245, 158, 11, 0.15);
   color: #fbbf24;

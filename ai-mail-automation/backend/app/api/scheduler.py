@@ -374,8 +374,32 @@ def manual_send_emails(payload: Optional[SendMailRequest] = None, db: Session = 
         subj = base_subj
         body = base_body
 
-        live_sent, delivery_note = dispatch_gmail_smtp(acc.email, subj, body, config=config)
-        delivery_mode = "live_smtp" if "Live" in delivery_note else "smtp_synced"
+        live_sent, delivery_note, is_blocked = dispatch_gmail_smtp(acc.email, subj, body, config=config)
+        delivery_mode = "live_smtp" if "Live" in delivery_note else ("blocked_by_google" if is_blocked else "smtp_synced")
+
+        undelivered_item = None
+        if is_blocked:
+            item_status = "blocked_message"
+            acc.status = "blocked_message"
+
+            undelivered_item = UndeliveredMail(
+                sent_mail_id=None,
+                to_email=acc.email,
+                bounce_reason=f"Google Message Blocked: {delivery_note[:450]}",
+                error_code="550 (Blocked)",
+                detected_at=utc_now(),
+                is_suppressed=True,
+                run_id=new_run.id,
+            )
+            db.add(undelivered_item)
+            new_run.undelivered_count += 1
+
+            existing_sup = db.query(SuppressionList).filter(SuppressionList.email == acc.email).first()
+            if not existing_sup:
+                db.add(SuppressionList(email=acc.email, reason="Google message blocked"))
+        else:
+            item_status = "sent"
+            acc.status = "sent"
 
         sent_item = SentMail(
             account_id=acc.id,
@@ -383,13 +407,15 @@ def manual_send_emails(payload: Optional[SendMailRequest] = None, db: Session = 
             from_email=sender_email,
             subject=subj,
             body_snippet=body[:220] + "...",
-            status="sent",
+            status=item_status,
             delivery_mode=delivery_mode,
             sent_at=utc_now(),
             run_id=new_run.id,
         )
         db.add(sent_item)
-        acc.status = "sent"
+        if is_blocked and undelivered_item:
+            undelivered_item.sent_mail_id = sent_item.id
+
         sent_records.append(sent_item)
 
         contacted_emails.add(acc_email)
@@ -475,6 +501,28 @@ def manual_check_replies(db: Session = Depends(get_db)):
     if real_replies:
         import re
         for rr in real_replies:
+            if rr.get("is_blocked_notice"):
+                blocked_target = rr.get("blocked_email")
+                if blocked_target:
+                    comp_acc = db.query(CompanyMailAccount).filter(CompanyMailAccount.email.ilike(blocked_target)).first()
+                    if comp_acc:
+                        comp_acc.status = "blocked_message"
+                    matching_sent = db.query(SentMail).filter(SentMail.to_email.ilike(blocked_target)).first()
+                    if matching_sent:
+                        matching_sent.status = "blocked_message"
+
+                    undeliv = UndeliveredMail(
+                        sent_mail_id=matching_sent.id if matching_sent else None,
+                        to_email=blocked_target,
+                        bounce_reason=f"Google Message Blocked: {rr['subject']}",
+                        error_code="550 (Blocked)",
+                        detected_at=utc_now(),
+                        is_suppressed=True,
+                    )
+                    db.add(undeliv)
+                    db.add(SuppressionList(email=blocked_target, reason="Google message blocked"))
+                continue
+
             clean_from_match = re.search(r'[\w\.-]+@[\w\.-]+', rr["from_email"])
             from_addr = clean_from_match.group(0).lower() if clean_from_match else rr["from_email"].lower()
 

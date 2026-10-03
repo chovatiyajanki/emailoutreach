@@ -1116,6 +1116,12 @@ export default function App() {
                       <span>Ready for Outreach: <strong style={{ color: '#38bdf8' }}>{accounts.filter(a => a.status === 'email_found').length}</strong></span>
                       <span>•</span>
                       <span>Contacted: <strong style={{ color: '#34d399' }}>{accounts.filter(a => a.status === 'sent' || a.status === 'replied').length}</strong></span>
+                      {accounts.some(a => a.status === 'blocked_message' || a.status === 'blocked message') && (
+                        <>
+                          <span>•</span>
+                          <span>Blocked: <strong style={{ color: '#f87171' }}>{accounts.filter(a => a.status === 'blocked_message' || a.status === 'blocked message').length}</strong></span>
+                        </>
+                      )}
                     </div>
                   </div>
 
@@ -1155,8 +1161,8 @@ export default function App() {
                           <td>{acc.city}</td>
                           <td>{acc.verification_score}/100</td>
                           <td>
-                            <span className={`status-chip ${acc.status}`}>
-                              {acc.status}
+                            <span className={`status-chip ${String(acc.status).replace(/\s+/g, '_')}`}>
+                              {acc.status === 'blocked_message' || acc.status === 'blocked message' ? 'blocked message' : acc.status}
                             </span>
                           </td>
                           <td style={{ color: '#94a3b8' }}>{acc.scraped_at}</td>
@@ -1164,6 +1170,10 @@ export default function App() {
                             {acc.status === 'email_found' ? (
                               <span style={{ color: '#38bdf8', fontSize: '12px', fontWeight: 600 }}>
                                  In Queue
+                              </span>
+                            ) : (acc.status === 'blocked_message' || acc.status === 'blocked message') ? (
+                              <span style={{ color: '#f87171', fontSize: '12px', fontWeight: 600 }}>
+                                 Blocked
                               </span>
                             ) : (
                               <span className="text-sent-done">✓ Sent</span>
@@ -1310,7 +1320,9 @@ export default function App() {
                         </td>
                         <td>{m.delivery_mode}</td>
                         <td>
-                          <span className={`status-chip ${m.status}`}>{m.status}</span>
+                          <span className={`status-chip ${String(m.status).replace(/\s+/g, '_')}`}>
+                            {m.status === 'blocked_message' || m.status === 'blocked message' ? 'blocked message' : m.status}
+                          </span>
                         </td>
                         <td style={{ color: '#94a3b8' }}>{m.sent_at}</td>
                       </tr>
@@ -1486,6 +1498,15 @@ export default function App() {
             </div>
 
             <div className="modal-dialog-body">
+              {selectedRecord.data.status && (
+                <div className="detail-line">
+                  <span className="detail-label">Status</span>
+                  <span className={`status-chip ${String(selectedRecord.data.status).replace(/\s+/g, '_')}`}>
+                    {selectedRecord.data.status === 'blocked_message' || selectedRecord.data.status === 'blocked message' ? 'blocked message' : selectedRecord.data.status}
+                  </span>
+                </div>
+              )}
+
               {selectedRecord.data.company_name && (
                 <div className="detail-line">
                   <span className="detail-label">Company Name</span>

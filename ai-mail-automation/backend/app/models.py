@@ -103,7 +103,7 @@ class CompanyMailAccount(Base):
     industry = Column(String(100), default="Technology")
     city = Column(String(100), default="Global")
     verification_score = Column(Float, default=85.0)
-    status = Column(String(50), default="email_found", nullable=False)  # email_found, sent, bounced, replied
+    status = Column(String(50), default="email_found", nullable=False)  # email_found, sent, bounced, replied, blocked_message
     scraped_at = Column(DateTime(timezone=True), default=utc_now, nullable=False)
     run_id = Column(UUID(as_uuid=True), ForeignKey("scheduler_runs.id"), nullable=True)
 
@@ -119,7 +119,7 @@ class SentMail(Base):
     from_email = Column(String(255), nullable=False)
     subject = Column(String(500), nullable=False)
     body_snippet = Column(Text, nullable=False)
-    status = Column(String(50), default="sent", nullable=False)  # sent, bounced, replied
+    status = Column(String(50), default="sent", nullable=False)  # sent, bounced, replied, blocked_message
     delivery_mode = Column(String(50), default="live_smtp", nullable=False)  # live_smtp, simulation
     sent_at = Column(DateTime(timezone=True), default=utc_now, nullable=False)
     run_id = Column(UUID(as_uuid=True), ForeignKey("scheduler_runs.id"), nullable=True)

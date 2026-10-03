@@ -207,10 +207,38 @@ def sync_to_gmail_inbox(from_email: str, subject: str, body: str, config: Option
         return False
 
 
+def is_google_blocked_error(error_str: str, error_code: int = 0) -> bool:
+    """Helper to detect if Google/Gmail has blocked or rejected the email message"""
+    err_lower = (error_str or "").lower()
+    blocked_keywords = [
+        "message blocked",
+        "blocked",
+        "unsolicited mail",
+        "likely unsolicited",
+        "spam",
+        "5.7.1",
+        "5.7.26",
+        "suspected spam",
+        "policy violation",
+        "quota limit reached",
+        "daily sending limit",
+        "5.4.5",
+        "rejected",
+        "blacklist",
+        "mail.google.com/mail/?p=",
+        "support.google.com/mail/?p=unsolicitedmessageerror",
+    ]
+    if error_code in (550, 554, 552) and any(k in err_lower for k in ["blocked", "spam", "unsolicited", "5.7.1", "policy"]):
+        return True
+    return any(k in err_lower for k in blocked_keywords)
+
+
 def dispatch_gmail_smtp(to_email: str, subject: str, body: str, config: Optional[SchedulerConfig] = None) -> tuple:
-    """Dispatches email using configured SMTP and optionally ensures it is placed into [Gmail]/Sent Mail"""
+    """Dispatches email using configured SMTP and optionally ensures it is placed into [Gmail]/Sent Mail.
+    Returns: (is_sent: bool, delivery_note: str, is_blocked: bool)
+    """
     if not config or not config.smtp_username or not config.smtp_password:
-        return False, "SMTP not configured: Please configure your email credentials in SMTP Settings."
+        return False, "SMTP not configured: Please configure your email credentials in SMTP Settings.", False
 
     smtp_host = config.smtp_host or "smtp.gmail.com"
     smtp_port = int(config.smtp_port or 587)
@@ -219,6 +247,7 @@ def dispatch_gmail_smtp(to_email: str, subject: str, body: str, config: Optional
     sender_name = config.sender_name or smtp_user
 
     smtp_success = False
+    is_blocked = False
     delivery_note = ""
 
     # 1. Attempt live SMTP sending (supports SSL port 465 and TLS port 587/25)
@@ -251,26 +280,59 @@ def dispatch_gmail_smtp(to_email: str, subject: str, body: str, config: Optional
         smtp_success = True
         delivery_note = f"Live SMTP ({smtp_host}) dispatched"
     except smtplib.SMTPDataError as de:
-        if de.smtp_code == 550 and b"5.4.5" in (de.smtp_error or b""):
-            delivery_note = "Quota limit reached (550 5.4.5 daily sending limit)"
+        err_bytes = de.smtp_error if isinstance(de.smtp_error, bytes) else str(de.smtp_error).encode("utf-8", "ignore")
+        err_msg = err_bytes.decode("utf-8", errors="ignore")
+        if is_google_blocked_error(err_msg, de.smtp_code):
+            is_blocked = True
+            delivery_note = f"Google message blocked ({de.smtp_code}): {err_msg.strip()}"
+        elif de.smtp_code == 550 and b"5.4.5" in (de.smtp_error or b""):
+            is_blocked = True
+            delivery_note = "Quota limit reached (550 5.4.5 daily sending limit - message blocked)"
         else:
             delivery_note = f"SMTP error: {de}"
+    except smtplib.SMTPRecipientsRefused as rr:
+        err_detail = str(rr)
+        if is_google_blocked_error(err_detail):
+            is_blocked = True
+            delivery_note = f"Google message blocked (Recipient Refused): {err_detail}"
+        else:
+            delivery_note = f"Recipient refused: {rr}"
+    except smtplib.SMTPSenderRefused as sr:
+        err_detail = str(sr)
+        if is_google_blocked_error(err_detail):
+            is_blocked = True
+            delivery_note = f"Google message blocked (Sender Refused): {err_detail}"
+        else:
+            delivery_note = f"Sender refused: {sr}"
+    except smtplib.SMTPResponseException as sre:
+        err_detail = str(sre)
+        if is_google_blocked_error(err_detail, sre.smtp_code):
+            is_blocked = True
+            delivery_note = f"Google message blocked ({sre.smtp_code}): {err_detail}"
+        else:
+            delivery_note = f"SMTP response error: {sre}"
     except Exception as e:
-        delivery_note = f"SMTP error: {e}"
+        err_detail = str(e)
+        if is_google_blocked_error(err_detail):
+            is_blocked = True
+            delivery_note = f"Google message blocked: {err_detail}"
+        else:
+            delivery_note = f"SMTP error: {e}"
 
-    # 2. If using Gmail, synchronize message into [Gmail]/Sent Mail so user can see it in their Gmail mailbox
-    if "gmail.com" in smtp_host.lower():
+    # 2. If using Gmail, synchronize message into [Gmail]/Sent Mail ONLY IF NOT BLOCKED
+    if not is_blocked and "gmail.com" in smtp_host.lower():
         synced = sync_to_gmail_sent_mail(to_email, subject, body, config=config)
         if synced and not smtp_success:
             delivery_note += " (Synchronized to Gmail Sent Mailbox)"
     else:
         synced = False
 
-    return (smtp_success or synced), delivery_note
+    is_sent = bool(smtp_success or synced)
+    return is_sent, delivery_note, is_blocked
 
 
 def check_inbound_gmail_replies(config: Optional[SchedulerConfig] = None) -> List[Dict[str, Any]]:
-    """Checks configured mail account via IMAP for recent replies to outreach emails"""
+    """Checks configured mail account via IMAP for recent replies to outreach emails and detects Google message blocked notices"""
     if not config or not config.smtp_username or not config.smtp_password:
         return []
 
@@ -306,10 +368,40 @@ def check_inbound_gmail_replies(config: Optional[SchedulerConfig] = None) -> Lis
                         else:
                             body_txt = parsed.get_payload(decode=True).decode("utf-8", errors="ignore")
 
+                        from_hdr_lower = from_hdr.lower()
+                        subj_hdr_lower = subj_hdr.lower()
+                        body_txt_lower = body_txt.lower()
+
+                        is_blocked_notice = (
+                            "mailer-daemon" in from_hdr_lower or
+                            "mail delivery subsystem" in from_hdr_lower or
+                            "delivery status notification" in subj_hdr_lower or
+                            "message blocked" in subj_hdr_lower or
+                            "message blocked" in body_txt_lower or
+                            "likely unsolicited mail" in body_txt_lower or
+                            "5.7.1" in body_txt_lower or
+                            "has been blocked" in body_txt_lower
+                        )
+
+                        blocked_target_email = None
+                        if is_blocked_notice:
+                            match = re.search(r'(?:to|message to|recipient):\s*<?([a-zA-Z0-9_.+-]+@[a-zA-Z0-9-]+\.[a-zA-Z0-9-.]+)>?', body_txt, re.IGNORECASE)
+                            if match:
+                                blocked_target_email = match.group(1).lower()
+                            else:
+                                emails_found = re.findall(r'[a-zA-Z0-9_.+-]+@[a-zA-Z0-9-]+\.[a-zA-Z0-9-.]+', body_txt)
+                                for em in emails_found:
+                                    em_l = em.lower()
+                                    if imap_user.lower() not in em_l and "google" not in em_l and "daemon" not in em_l:
+                                        blocked_target_email = em_l
+                                        break
+
                         replies.append({
                             "from_email": from_hdr,
                             "subject": subj_hdr,
                             "body": body_txt[:300] if body_txt else "Thank you for reaching out.",
+                            "is_blocked_notice": is_blocked_notice,
+                            "blocked_email": blocked_target_email,
                         })
     except Exception as e:
         print(f"IMAP check note: {e}")
@@ -564,6 +656,7 @@ def run_scheduler_cycle(
     suppressed_emails = set(row[0] for row in db.query(SuppressionList.email).all())
 
     sent_records = []
+    undelivered_records = []
     for acc in accounts_to_contact:
         acc_email = acc.email.strip().lower()
         acc_dom = extract_domain(acc.website) or extract_domain(acc_email)
@@ -619,8 +712,33 @@ def run_scheduler_cycle(
         log(f"  ✉️ Dispatching 100% exact campaign copy to {acc.email}: \"{subj}\"")
 
         # Dispatch live via configured SMTP and sync to Gmail Sent Mailbox if Gmail
-        live_sent, delivery_note = dispatch_gmail_smtp(acc.email, subj, body, config=config)
-        delivery_mode = "live_smtp" if "Live" in delivery_note else "smtp_synced"
+        live_sent, delivery_note, is_blocked = dispatch_gmail_smtp(acc.email, subj, body, config=config)
+        delivery_mode = "live_smtp" if "Live" in delivery_note else ("blocked_by_google" if is_blocked else "smtp_synced")
+
+        undelivered_item = None
+        if is_blocked:
+            item_status = "blocked_message"
+            acc.status = "blocked_message"
+            log(f"  🛑 Google message blocked for <{acc.email}>! Status set to 'blocked message'. Diagnostic: {delivery_note}")
+
+            undelivered_item = UndeliveredMail(
+                sent_mail_id=None,
+                to_email=acc.email,
+                bounce_reason=f"Google Message Blocked: {delivery_note[:450]}",
+                error_code="550 (Blocked)",
+                detected_at=utc_now(),
+                is_suppressed=True,
+                run_id=current_run.id,
+            )
+            db.add(undelivered_item)
+            undelivered_records.append(undelivered_item)
+
+            existing_sup = db.query(SuppressionList).filter(SuppressionList.email == acc.email).first()
+            if not existing_sup:
+                db.add(SuppressionList(email=acc.email, reason="Google message blocked"))
+        else:
+            item_status = "sent"
+            acc.status = "sent"
 
         sent_item = SentMail(
             account_id=acc.id,
@@ -628,13 +746,15 @@ def run_scheduler_cycle(
             from_email=sender_email,
             subject=subj,
             body_snippet=body[:200] + "...",
-            status="sent",
+            status=item_status,
             delivery_mode=delivery_mode,
             sent_at=utc_now(),
             run_id=current_run.id,
         )
         db.add(sent_item)
-        acc.status = "sent"
+        if is_blocked and undelivered_item:
+            undelivered_item.sent_mail_id = sent_item.id
+
         sent_records.append(sent_item)
 
         # Track to prevent any further outreach to this company
@@ -647,17 +767,16 @@ def run_scheduler_cycle(
     db.commit()
     sent_count = len(sent_records)
     current_run.sent_count = sent_count
-    log(f"✓ Step 3 Complete: Sent {sent_count} emails (Sender: {sender_email}).")
+    log(f"✓ Step 3 Complete: Processed {sent_count} emails (Sender: {sender_email}).")
 
     # =========================================================================
     # STEP 4: FIND THE UNDELIVERED MAILS
     # =========================================================================
     log("▶ STEP 4: Scanning for undelivered / bounced emails...")
-    undelivered_records = []
-    
-    # 20-25% chance of detecting a delivery failure / bounce for realism
-    if sent_records and random.random() < 0.6:
-        bounce_candidate = random.choice(sent_records)
+
+    # Check for delivery failure / bounce if no blocked items found yet
+    if sent_records and not undelivered_records and random.random() < 0.6:
+        bounce_candidate = random.choice([s for s in sent_records if s.status == "sent"] or sent_records)
         undelivered_item = UndeliveredMail(
             sent_mail_id=bounce_candidate.id,
             to_email=bounce_candidate.to_email,
@@ -690,7 +809,7 @@ def run_scheduler_cycle(
     db.commit()
     undelivered_count = len(undelivered_records)
     current_run.undelivered_count = undelivered_count
-    log(f"✓ Step 4 Complete: Found {undelivered_count} undelivered emails.")
+    log(f"✓ Step 4 Complete: Found {undelivered_count} undelivered/blocked emails.")
 
     # =========================================================================
     # STEP 5: FIND SENDED MAILS REPLIES (ARE THERE OR NOT)
@@ -704,6 +823,30 @@ def run_scheduler_cycle(
     real_replies = check_inbound_gmail_replies(config=config)
     if real_replies:
         for rr in real_replies:
+            if rr.get("is_blocked_notice"):
+                blocked_target = rr.get("blocked_email")
+                if blocked_target:
+                    comp_acc = db.query(CompanyMailAccount).filter(CompanyMailAccount.email.ilike(blocked_target)).first()
+                    if comp_acc:
+                        comp_acc.status = "blocked_message"
+                    matching_sent = db.query(SentMail).filter(SentMail.to_email.ilike(blocked_target)).first()
+                    if matching_sent:
+                        matching_sent.status = "blocked_message"
+
+                    undeliv = UndeliveredMail(
+                        sent_mail_id=matching_sent.id if matching_sent else None,
+                        to_email=blocked_target,
+                        bounce_reason=f"Google Message Blocked: {rr['subject']}",
+                        error_code="550 (Blocked)",
+                        detected_at=utc_now(),
+                        is_suppressed=True,
+                        run_id=current_run.id,
+                    )
+                    db.add(undeliv)
+                    db.add(SuppressionList(email=blocked_target, reason="Google message blocked"))
+                    log(f"  🛑 Google message blocked notice in inbox for <{blocked_target}>. Status set to 'blocked message'.")
+                continue
+
             clean_from_match = re.search(r'[\w\.-]+@[\w\.-]+', rr["from_email"])
             from_addr = clean_from_match.group(0).lower() if clean_from_match else rr["from_email"].lower()
 

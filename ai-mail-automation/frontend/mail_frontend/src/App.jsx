@@ -4,27 +4,27 @@ import RichTextEditor, { ensureHtmlContent } from './RichTextEditor'
 
 const MAIL_PRESETS = [
   {
-    label: '🚀 B2B Cold Outreach',
+    label: ' B2B Cold Outreach',
     subject: 'Partnership & Automation Opportunities for {{company_name}}',
     body: "<p>Hi {{company_name}} Team,</p><p>I came across <b>{{website}}</b> and noticed your work in <i>{{industry}}</i> across {{city}}. Our platform automates B2B email workflows and communication pipelines.</p><p>Would you be open to a brief <b>10-minute demo</b> next week to see how we can reduce manual outreach by 40%?</p><p>Best regards,<br><b>{{sender_name}}</b></p>"
   },
   {
-    label: '🤝 Business Collaboration',
+    label: ' Business Collaboration',
     subject: 'Potential collaboration with {{company_name}} in {{city}}',
     body: "<p>Hi there,</p><p>I've been following <b>{{company_name}}</b>'s recent growth in {{city}}. We collaborate with leading {{industry}} companies to streamline client engagement and outreach.</p><p>Are you available for a quick chat this Thursday to explore mutual synergies?</p><p>Best,<br><b>{{sender_name}}</b></p>"
   },
   {
-    label: '📅 10-Min Demo Request',
+    label: ' 10-Min Demo Request',
     subject: 'Quick question for {{company_name}} leadership',
     body: "<p>Hello {{company_name}} Team,</p><p>I checked out <b>{{website}}</b> and was impressed by your execution in the {{industry}} space. We built an automated system specifically helping companies like yours eliminate outreach bottlenecks.</p><p>Would you have <b>10 minutes</b> next Tuesday or Wednesday for a quick look?</p><p>Cheers,<br><b>{{sender_name}}</b></p>"
   },
   {
-    label: '🏥 Healthcare & Supplies',
+    label: ' Healthcare & Supplies',
     subject: 'Supply chain & inventory automation for {{company_name}}',
     body: "<p>Dear {{company_name}} Management,</p><p>We support healthcare facilities and pharmacies in <b>{{city}}</b> with verified supplier pipelines and automated ordering workflows.</p><p>Could we share a 2-page brief on how we help {{industry}} providers optimize their procurement?</p><p>Warm regards,<br><b>{{sender_name}}</b></p>"
   },
   {
-    label: '🏢 Local Business Growth',
+    label: ' Local Business Growth',
     subject: 'Growth opportunities for {{company_name}} in {{city}}',
     body: "<p>Hi {{company_name}} Team,</p><p>We are actively working with premier <b>{{industry}}</b> businesses in {{city}} to scale their local outreach and client acquisitions.</p><p>I'd love to share two quick ideas tailored to <b>{{website}}</b>. Do you have 5 minutes this week?</p><p>Best regards,<br><b>{{sender_name}}</b></p>"
   }
@@ -413,7 +413,7 @@ export default function App() {
 
 
   // Render live preview replacing placeholders with simulated lead data
-  const renderLivePreview = (text) => {
+  const renderLivePreview = (text, isHtml = false) => {
     if (!text) return ''
     // If only empty HTML tags or spaces, return empty string so placeholder shows
     const stripped = text.replace(/<[^>]+>/g, '').replace(/&nbsp;/g, ' ').trim()
@@ -433,7 +433,12 @@ export default function App() {
       .replace(/\{\{industry\}\}/g, sample.industry)
       .replace(/\{\{sender_name\}\}/g, sample.sender_name)
 
-    // If plain text (does not contain html tags), wrap paragraphs in <p>
+    // For subject lines (plain text only), strip any accidental HTML tags
+    if (!isHtml) {
+      return replaced.replace(/<[^>]+>/g, '').trim()
+    }
+
+    // For email body: If plain text (does not contain html tags), wrap paragraphs in <p>
     if (!/<(p|div|br|b|i|u|h1|h2|h3|ul|ol|li|blockquote|a)[\s>]/i.test(replaced)) {
       replaced = replaced
         .split(/\n\n+/)
@@ -446,12 +451,13 @@ export default function App() {
   // Save email template to backend
   const handleSaveMailTemplate = async () => {
     setIsSavingTemplate(true)
+    const cleanSubject = editorSubject.replace(/<[^>]+>/g, '').trim()
     try {
       const res = await fetch('http://localhost:8000/api/template/save', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
-          subject: editorSubject,
+          subject: cleanSubject,
           body: editorBody,
           campaign_id: status.active_campaign?.id || null,
         }),
@@ -1361,7 +1367,7 @@ export default function App() {
                   <div className="no-data-icon"></div>
                   <h4 className="no-data-title">No Inbound Replies Yet</h4>
                   <p className="no-data-hint">
-                    Step 5 scans for lead responses and classifies intent (Interested, Meeting Requested, etc.).
+                    scans for lead responses and classifies intent (Interested, Meeting Requested, etc.).
                   </p>
                 </div>
               ) : (
@@ -1372,7 +1378,7 @@ export default function App() {
                       <th>From</th>
                       <th>Subject</th>
                       <th>Reply Snippet</th>
-                      <th>AI Classification</th>
+                      <th>Classification</th>
                       <th>Received Time</th>
                     </tr>
                   </thead>
@@ -1866,7 +1872,7 @@ export default function App() {
                   ✉️
                 </div>
                 <div>
-                  <h3 className="campaign-modal-title">Mail Editor & Template Customizer</h3>
+                  <h3 className="campaign-modal-title">Mail Editor</h3>
                   <p className="campaign-modal-subtitle">
                     Customize the exact email subject, body message, and variable tags sent to companies.
                   </p>
@@ -1912,7 +1918,6 @@ export default function App() {
                 {/* LEFT: EDIT PANE */}
                 <div className="editor-pane">
                   <div className="pane-section-title">
-                    <span>✏️</span>
                     <span>Edit Email Template</span>
                   </div>
 
@@ -1961,7 +1966,7 @@ export default function App() {
                       onClick={handleEnhanceMailTemplate}
                       title="Use Groq LLM to polish and upgrade your copy"
                     >
-                      {isEnhancing ? ' Enhancing...' : '✨ Polish with AI'}
+                      {isEnhancing ? ' Enhancing...' : 'Polish with AI'}
                     </button>
                   </div>
                 </div>
@@ -1969,7 +1974,6 @@ export default function App() {
                 {/* RIGHT: LIVE RECIPIENT PREVIEW */}
                 <div className="preview-pane">
                   <div className="pane-section-title">
-                    <span>👁️</span>
                     <span>Live Recipient View</span>
                   </div>
 
@@ -1997,7 +2001,7 @@ export default function App() {
                       <div className="email-meta-line">
                         <span className="meta-label">Subject:</span>
                         <span className="meta-subject">
-                          {renderLivePreview(editorSubject) || '(No subject entered)'}
+                          {renderLivePreview(editorSubject, false) || '(No subject entered)'}
                         </span>
                       </div>
                     </div>
@@ -2005,12 +2009,12 @@ export default function App() {
                     <div
                       className="email-body-preview"
                       dangerouslySetInnerHTML={{
-                        __html: renderLivePreview(editorBody) || '<span style="color:#64748b;">Start typing in the editor on the left to see your email rendered here in real time...</span>'
+                        __html: renderLivePreview(editorBody, true) || '<span style="color:#64748b;">Start typing in the editor on the left to see your email rendered here in real time...</span>'
                       }}
                     />
 
                     <div style={{ padding: '10px 16px', background: '#080d19', borderTop: '1px solid #1e293b', fontSize: '11.5px', color: '#94a3b8' }}>
-                      💡 <strong>Live Test Sample:</strong> Variables like <code>{"{{company_name}}"}</code>, <code>{"{{city}}"}</code>, <code>{"{{website}}"}</code> are automatically substituted with each target company's real data upon dispatch.
+                       <strong>Live Test Sample:</strong> Variables like <code>{"{{company_name}}"}</code>, <code>{"{{city}}"}</code>, <code>{"{{website}}"}</code> are automatically substituted with each target company's real data upon dispatch.
                     </div>
                   </div>
                 </div>
@@ -2021,30 +2025,32 @@ export default function App() {
             <div className="campaign-modal-footer">
               <button
                 type="button"
-                className="campaign-cancel-btn"
+                className="btn-campaign-cancel campaign-cancel-btn"
                 onClick={() => setIsMailEditorOpen(false)}
               >
                 Cancel
               </button>
-              <button
-                type="button"
-                className="btn-campaign-save-only"
-                onClick={() => {
-                  setEditorSubject('Partnership & Automation Opportunities for {{company_name}}')
-                  setEditorBody("Hi {{company_name}} Team,\n\nI came across {{website}} and noticed your work in {{industry}} across {{city}}. Our platform automates B2B email workflows and communication pipelines.\n\nWould you be open to a 10-minute demo next week?\n\nBest regards,\n{{sender_name}}")
-                }}
-              >
-                ↺ Reset Default
-              </button>
-              <button
-                type="button"
-                className="btn-campaign-launch"
-                style={{ background: 'linear-gradient(135deg, #4f46e5 0%, #7c3aed 100%)' }}
-                disabled={isSavingTemplate}
-                onClick={handleSaveMailTemplate}
-              >
-                {isSavingTemplate ? 'Saving...' : '✓ Save & Apply Template'}
-              </button>
+              <div className="footer-right-actions">
+                <button
+                  type="button"
+                  className="btn-campaign-save-only"
+                  onClick={() => {
+                    setEditorSubject('Partnership & Automation Opportunities for {{company_name}}')
+                    setEditorBody("Hi {{company_name}} Team,\n\nI came across {{website}} and noticed your work in {{industry}} across {{city}}. Our platform automates B2B email workflows and communication pipelines.\n\nWould you be open to a 10-minute demo next week?\n\nBest regards,\n{{sender_name}}")
+                  }}
+                >
+                  ↺ Reset Default
+                </button>
+                <button
+                  type="button"
+                  className="btn-campaign-launch"
+                  style={{ background: 'linear-gradient(135deg, #4f46e5 0%, #7c3aed 100%)' }}
+                  disabled={isSavingTemplate}
+                  onClick={handleSaveMailTemplate}
+                >
+                  {isSavingTemplate ? 'Saving...' : '✓ Save & Apply Template'}
+                </button>
+              </div>
             </div>
           </div>
         </div>

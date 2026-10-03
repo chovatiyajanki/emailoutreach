@@ -251,7 +251,7 @@ export default function RichTextEditor({
           onMouseDown={(e) => { e.preventDefault(); executeCmd('justifyLeft'); }}
           title="Align Left"
         >
-          ⯸ Left
+           Left
         </button>
 
         <button
@@ -261,7 +261,7 @@ export default function RichTextEditor({
           onMouseDown={(e) => { e.preventDefault(); executeCmd('justifyCenter'); }}
           title="Align Center"
         >
-          ⯹ Center
+           Center
         </button>
 
         <span className="rte-divider" />
@@ -274,7 +274,7 @@ export default function RichTextEditor({
           onMouseDown={(e) => { e.preventDefault(); handleInsertLink(); }}
           title="Insert Link"
         >
-          🔗 Link
+           Link
         </button>
 
         {/* Clear Formatting */}
@@ -285,7 +285,7 @@ export default function RichTextEditor({
           onMouseDown={(e) => { e.preventDefault(); executeCmd('removeFormat'); }}
           title="Clear Formatting"
         >
-          🧹 Clean
+           Clean
         </button>
 
         {/* Undo / Redo */}
@@ -317,7 +317,7 @@ export default function RichTextEditor({
             onClick={() => handleToggleViewMode('visual')}
             title="Visual WYSIWYG Editor"
           >
-            👁️ Visual
+             Visual
           </button>
           <button
             type="button"
@@ -365,8 +365,8 @@ export default function RichTextEditor({
       <div className="rte-footer">
         <span className="rte-footer-hint">
           {viewMode === 'visual'
-            ? '💡 Use formatting controls above or paste styled copy directly.'
-            : '💡 Raw HTML Mode: Standard <b>, <i>, <a>, <ul>, <p> tags supported.'}
+            ? ' Use formatting controls above or paste styled copy directly.'
+            : ' Raw HTML Mode: Standard <b>, <i>, <a>, <ul>, <p> tags supported.'}
         </span>
         <div className="rte-metrics">
           <span>{wordCount} words</span>

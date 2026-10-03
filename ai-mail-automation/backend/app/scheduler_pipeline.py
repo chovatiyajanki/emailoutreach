@@ -611,32 +611,12 @@ def run_scheduler_cycle(
             .replace("{{sender_name}}", sender_name)
         )
 
-        # Check if the user wrote their own custom campaign subject & body
-        is_user_custom_copy = bool(
-            (target_campaign and target_campaign.email_subject and target_campaign.email_body)
-            or (config and config.email_subject and config.email_body)
-        )
-
-        if is_user_custom_copy:
-            # User wrote their own specific subject and message: Send 100% of their exact words!
-            subj = base_subj
-            body = base_body
-            log(f"  ✉️ Dispatching campaign email to {acc.email}: \"{subj}\"")
-        else:
-            # Default or unconfigured copy: Use Groq AI to draft a personalized message
-            ai_subj, ai_body, is_ai_generated = generate_ai_personalized_email(
-                company_name=acc.company_name,
-                website=acc.website,
-                industry=acc.industry,
-                city=acc.city,
-                base_subject=base_subj,
-                base_body=base_body,
-                sender_name=sender_name,
-            )
-            subj = ai_subj if is_ai_generated else base_subj
-            body = ai_body if is_ai_generated else base_body
-            if is_ai_generated:
-                log(f"  ✨ [Groq AI: {settings.GROQ_MODEL}] Personalized email crafted for {acc.company_name}")
+        # Send Your EXACT Subject & Body (Recommended):
+        # 100% of your exact words are sent in every email (with placeholders like {{company_name}} replaced).
+        # Groq automatic rewriting during email dispatch is completely disabled.
+        subj = base_subj
+        body = base_body
+        log(f"  ✉️ Dispatching 100% exact campaign copy to {acc.email}: \"{subj}\"")
 
         # Dispatch live via configured SMTP and sync to Gmail Sent Mailbox if Gmail
         live_sent, delivery_note = dispatch_gmail_smtp(acc.email, subj, body, config=config)

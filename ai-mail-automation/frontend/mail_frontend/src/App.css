@@ -43,10 +43,11 @@
   display: flex;
   align-items: center;
   justify-content: space-between;
-  padding: 0 24px;
+  padding: 0 40px;
   position: sticky;
   top: 0;
   z-index: 50;
+  box-sizing: border-box;
 }
 
 .nav-brand {
@@ -162,10 +163,9 @@
    ========================================================================== */
 .main-wrapper {
   flex: 1;
-  padding: 24px;
-  max-width: 1280px;
-  margin: 0 auto;
+  padding: 24px 40px;
   width: 100%;
+  box-sizing: border-box;
   display: flex;
   flex-direction: column;
   gap: 20px;
@@ -1214,22 +1214,38 @@
   gap: 10px;
 }
 
-.btn-campaign-cancel {
+.btn-campaign-cancel,
+.campaign-cancel-btn {
   background: #192338;
   color: #94a3b8;
   border: 1px solid #233252;
-  padding: 9px 15px;
+  padding: 9px 16px;
   border-radius: 8px;
   font-size: 13px;
   font-weight: 500;
   cursor: pointer;
   transition: all 0.15s ease;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  outline: none;
+  font-family: inherit;
 }
 
-.btn-campaign-cancel:hover {
+.btn-campaign-cancel:hover,
+.campaign-cancel-btn:hover {
   background: #23314f;
   color: #ffffff;
+  border-color: #3b82f6;
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.25);
 }
+
+.btn-campaign-cancel:active,
+.campaign-cancel-btn:active {
+  transform: translateY(1px);
+  background: #162035;
+}
+
 
 .btn-campaign-schedule {
   background: linear-gradient(135deg, #6366f1, #4f46e5);
@@ -2353,4 +2369,338 @@
   gap: 6px;
   font-weight: 600;
   color: #94a3b8;
+}
+
+.exact-words-badge {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  background: rgba(16, 185, 129, 0.08);
+  border: 1px solid rgba(16, 185, 129, 0.3);
+  border-radius: 8px;
+  padding: 10px 14px;
+  font-size: 12px;
+  color: #a7f3d0;
+  line-height: 1.5;
+  margin-bottom: 14px;
+}
+
+.exact-words-badge strong {
+  color: #34d399;
+}
+
+.exact-words-badge code {
+  background: rgba(0, 0, 0, 0.35);
+  color: #6ee7b7;
+  padding: 1px 5px;
+  border-radius: 4px;
+  font-size: 11.5px;
+}
+
+.badge-shield {
+  font-size: 15px;
+  flex-shrink: 0;
+  margin-top: 1px;
+}
+
+/* ==========================================================================
+   RESPONSIVE DESIGN BREAKPOINTS
+   Fluid layout without container restrictions, adapts seamlessly down to mobile
+   ========================================================================== */
+
+/* Tablet & Medium Desktops (<= 1024px) */
+@media (max-width: 1024px) {
+  .top-navbar {
+    padding: 0 24px;
+  }
+
+  .main-wrapper {
+    padding: 20px 24px;
+    gap: 18px;
+  }
+
+  .hero-header-row {
+    flex-direction: column;
+    align-items: stretch;
+    gap: 14px;
+  }
+
+  .hero-actions-group {
+    align-self: flex-start;
+  }
+
+  .config-strip {
+    flex-wrap: wrap;
+    gap: 12px;
+  }
+
+  .btn-save-config {
+    margin-left: 0;
+  }
+}
+
+/* Small Tablets & Large Phones (<= 768px) */
+@media (max-width: 768px) {
+  .top-navbar {
+    height: auto;
+    min-height: 56px;
+    padding: 12px 16px;
+    flex-wrap: wrap;
+    gap: 10px;
+  }
+
+  .nav-brand {
+    gap: 10px;
+  }
+
+  .brand-heading {
+    font-size: 15px;
+  }
+
+  .brand-subtext {
+    font-size: 10.5px;
+  }
+
+  .nav-controls {
+    width: 100%;
+    justify-content: flex-start;
+    flex-wrap: wrap;
+    gap: 8px;
+  }
+
+  .sender-pill {
+    font-size: 11px;
+    padding: 5px 10px;
+  }
+
+  .nav-btn,
+  .btn-reset-danger {
+    padding: 6px 10px;
+    font-size: 11.5px;
+  }
+
+  .main-wrapper {
+    padding: 16px 16px;
+    gap: 16px;
+  }
+
+  .scheduler-hero-card {
+    padding: 16px;
+    gap: 14px;
+  }
+
+  .status-badge-group {
+    flex-direction: column;
+    align-items: flex-start;
+    gap: 10px;
+  }
+
+  .hero-meta {
+    flex-direction: row;
+    flex-wrap: wrap;
+    gap: 6px;
+  }
+
+  .hero-stat-badge {
+    font-size: 11.5px;
+    padding: 4px 8px;
+  }
+
+  .hero-actions-group {
+    width: 100%;
+    flex-direction: column;
+    gap: 8px;
+  }
+
+  .btn-toggle-scheduler,
+  .btn-trigger-now {
+    width: 100%;
+    justify-content: center;
+  }
+
+  .config-strip {
+    padding: 12px;
+    flex-direction: column;
+    align-items: stretch;
+    gap: 10px;
+  }
+
+  .config-item {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    width: 100%;
+  }
+
+  .config-input.text {
+    min-width: 0;
+    flex: 1;
+    width: 100%;
+  }
+
+  .btn-save-config {
+    margin-left: 0;
+    width: 100%;
+    justify-content: center;
+  }
+
+  .pipeline-flow-container {
+    overflow-x: auto;
+    -webkit-overflow-scrolling: touch;
+    scrollbar-width: thin;
+    padding-bottom: 8px;
+  }
+
+  .pipeline-step-node {
+    min-width: 175px;
+    padding: 12px 14px;
+  }
+
+  .table-tabs-header {
+    flex-direction: column;
+    align-items: stretch;
+    gap: 10px;
+    padding: 12px 14px;
+  }
+
+  .tabs-group {
+    overflow-x: auto;
+    -webkit-overflow-scrolling: touch;
+    scrollbar-width: thin;
+    padding-bottom: 4px;
+    flex-wrap: nowrap;
+    width: 100%;
+  }
+
+  .tab-pill-btn {
+    white-space: nowrap;
+    flex-shrink: 0;
+    padding: 6px 12px;
+    font-size: 11.5px;
+  }
+
+  .filter-search-box {
+    width: 100%;
+    box-sizing: border-box;
+  }
+
+  .outreach-table {
+    min-width: 600px;
+  }
+
+  .table-scroll-area {
+    overflow-x: auto;
+    -webkit-overflow-scrolling: touch;
+    scrollbar-width: thin;
+  }
+
+  .campaigns-tab-container {
+    padding: 12px 10px;
+    gap: 16px;
+  }
+
+  .campaigns-metrics-banner {
+    grid-template-columns: 1fr;
+    gap: 12px;
+  }
+
+  .accounts-table-toolbar {
+    flex-direction: column;
+    align-items: stretch;
+    gap: 10px;
+    padding: 10px 14px;
+  }
+
+  .accounts-toolbar-info {
+    flex-wrap: wrap;
+    justify-content: space-between;
+  }
+
+  .btn-send-mail-small {
+    width: 100%;
+    justify-content: center;
+  }
+
+  /* Modals on Small Screens */
+  .modal-dialog-card,
+  .campaign-modal-dialog,
+  .smtp-modal-dialog {
+    width: calc(100vw - 20px) !important;
+    max-width: 100% !important;
+    max-height: 92vh !important;
+    margin: 10px auto;
+  }
+
+  .campaign-modal-header {
+    padding: 14px 16px;
+  }
+
+  .campaign-modal-body {
+    padding: 16px 14px;
+    gap: 14px;
+  }
+
+  .campaign-modal-footer {
+    padding: 12px 16px;
+    flex-wrap: wrap;
+    gap: 10px;
+    justify-content: space-between;
+  }
+
+  .form-grid-3 {
+    grid-template-columns: 1fr;
+    gap: 10px;
+  }
+
+  .mail-editor-dialog {
+    width: calc(100vw - 16px) !important;
+    max-height: 94vh !important;
+  }
+}
+
+/* Extra Small Phones (<= 480px) */
+@media (max-width: 480px) {
+  .top-navbar {
+    padding: 10px 12px;
+  }
+
+  .main-wrapper {
+    padding: 12px 12px;
+    gap: 12px;
+  }
+
+  .config-item {
+    flex-direction: column;
+    align-items: flex-start;
+    gap: 4px;
+  }
+
+  .config-input.number,
+  .config-select {
+    width: 100%;
+    box-sizing: border-box;
+  }
+
+  .campaign-modal-footer {
+    flex-direction: column;
+    align-items: stretch;
+    gap: 8px;
+  }
+
+  .campaign-modal-footer .btn-campaign-cancel,
+  .campaign-modal-footer .campaign-cancel-btn {
+    width: 100%;
+    justify-content: center;
+  }
+
+  .footer-right-actions {
+    width: 100%;
+    flex-direction: column;
+    gap: 8px;
+  }
+
+  .footer-right-actions button {
+    width: 100%;
+    justify-content: center;
+  }
 }

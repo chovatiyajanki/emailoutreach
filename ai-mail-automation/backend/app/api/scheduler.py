@@ -368,27 +368,11 @@ def manual_send_emails(payload: Optional[SendMailRequest] = None, db: Session = 
             .replace("{{sender_name}}", sender_name)
         )
 
-        # Check if the user wrote their own custom campaign subject & body
-        is_user_custom_copy = bool(
-            (target_campaign and target_campaign.email_subject and target_campaign.email_body)
-            or (config and config.email_subject and config.email_body)
-        )
-
-        if is_user_custom_copy:
-            subj = base_subj
-            body = base_body
-        else:
-            ai_subj, ai_body, is_ai = generate_ai_personalized_email(
-                company_name=acc.company_name,
-                website=acc.website,
-                industry=acc.industry,
-                city=acc.city,
-                base_subject=base_subj,
-                base_body=base_body,
-                sender_name=sender_name,
-            )
-            subj = ai_subj if is_ai else base_subj
-            body = ai_body if is_ai else base_body
+        # Send Your EXACT Subject & Body (Recommended):
+        # 100% of your exact words are sent in every email (with placeholders like {{company_name}} replaced).
+        # Groq automatic rewriting during dispatch is completely disabled.
+        subj = base_subj
+        body = base_body
 
         live_sent, delivery_note = dispatch_gmail_smtp(acc.email, subj, body, config=config)
         delivery_mode = "live_smtp" if "Live" in delivery_note else "smtp_synced"

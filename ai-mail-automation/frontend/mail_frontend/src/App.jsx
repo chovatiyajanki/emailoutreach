@@ -112,8 +112,8 @@ export default function App() {
 
   // SMTP Settings modal and configuration state
   const [isSmtpModalOpen, setIsSmtpModalOpen] = useState(false)
-  const [smtpHost, setSmtpHost] = useState('smtp.gmail.com')
-  const [smtpPort, setSmtpPort] = useState(587)
+  const [smtpHost, setSmtpHost] = useState('smtp.hostinger.com')
+  const [smtpPort, setSmtpPort] = useState(465)
   const [smtpUsername, setSmtpUsername] = useState('')
   const [smtpPassword, setSmtpPassword] = useState('')
   const [smtpSenderName, setSmtpSenderName] = useState('')
@@ -253,7 +253,7 @@ export default function App() {
       if (res.ok) {
         await fetchAllData()
         setActiveTab('accounts')
-        setFeedbackMsg(`✓ Cycle complete for "${editQuery || 'All Companies'}". Discovered accounts updated in PostgreSQL!`)
+        setFeedbackMsg(`Cycle complete for "${editQuery || 'All Companies'}". Discovered accounts updated in PostgreSQL!`)
       } else {
         setFeedbackMsg('Cycle encountered an error.')
       }
@@ -288,7 +288,7 @@ export default function App() {
       if (res.ok) {
         await fetchAllData()
         setActiveTab('campaigns')
-        setFeedbackMsg(`✓ Campaign "${campaignName}" launched! 5-step cycle executed and metrics updated.`)
+        setFeedbackMsg(`Campaign "${campaignName}" launched! 5-step cycle executed and metrics updated.`)
       } else {
         setFeedbackMsg('Campaign execution encountered an error.')
       }
@@ -321,7 +321,7 @@ export default function App() {
       if (res.ok) {
         await fetchAllData()
         setActiveTab('campaigns')
-        setFeedbackMsg(`✓ Campaign "${campaignName}" saved & Scheduler started! Running every ${editInterval >= 60 ? (editInterval / 60) + ' min' : editInterval + 's'}.`)
+        setFeedbackMsg(`Campaign "${campaignName}" saved & Scheduler started! Running every ${editInterval >= 60 ? (editInterval / 60) + ' min' : editInterval + 's'}.`)
       }
     } catch {
       setFeedbackMsg('Failed to save campaign and start scheduler.')
@@ -350,7 +350,7 @@ export default function App() {
       if (res.ok) {
         await fetchAllData()
         setActiveTab('campaigns')
-        setFeedbackMsg(`✓ Campaign "${campaignName}" saved successfully.`)
+        setFeedbackMsg(`Campaign "${campaignName}" saved successfully.`)
       }
     } catch {
       setFeedbackMsg('Failed to save campaign.')
@@ -365,7 +365,7 @@ export default function App() {
       })
       if (res.ok) {
         await fetchAllData()
-        setFeedbackMsg(`✓ Campaign "${cName}" is now active in scheduler.`)
+        setFeedbackMsg(`Campaign "${cName}" is now active in scheduler.`)
       }
     } catch {
       setFeedbackMsg('Failed to activate campaign.')
@@ -382,7 +382,7 @@ export default function App() {
       })
       if (res.ok) {
         await fetchAllData()
-        setFeedbackMsg(`✓ 5-step cycle completed for "${cName}"!`)
+        setFeedbackMsg(`5-step cycle completed for "${cName}"!`)
       } else {
         setFeedbackMsg('Campaign run encountered an error.')
       }
@@ -468,7 +468,7 @@ export default function App() {
         setCampaignBody(editorBody)
         await fetchAllData()
         setIsMailEditorOpen(false)
-        setFeedbackMsg('✓ Email template saved & applied to active outreach!')
+        setFeedbackMsg('Email template saved & applied to active outreach!')
       } else {
         alert(data.message || 'Failed to save template.')
       }
@@ -486,7 +486,7 @@ export default function App() {
       return
     }
     setIsEnhancing(true)
-    setFeedbackMsg('✨ AI is polishing and enhancing your email template...')
+    setFeedbackMsg('AI is polishing and enhancing your email template...')
     try {
       const res = await fetch('http://localhost:8000/api/template/enhance', {
         method: 'POST',
@@ -501,7 +501,7 @@ export default function App() {
       if (res.ok && data.success) {
         if (data.subject) setEditorSubject(data.subject)
         if (data.body) setEditorBody(data.body)
-        setFeedbackMsg('✨ Template enhanced with AI! Review and click "Save & Apply".')
+        setFeedbackMsg('Template enhanced with AI! Review and click "Save & Apply".')
       } else {
         setFeedbackMsg(data.message || 'AI enhance encountered an issue.')
       }
@@ -572,7 +572,7 @@ export default function App() {
       })
       if (res.ok) {
         const data = await res.json()
-        setFeedbackMsg(`✓ ${data.message || 'SMTP settings saved!'}`)
+        setFeedbackMsg(`${data.message || 'SMTP settings saved!'}`)
         await fetchAllData()
         setIsSmtpModalOpen(false)
       } else {
@@ -612,7 +612,13 @@ export default function App() {
   // Apply quick provider preset
   const applySmtpPreset = (preset) => {
     setSmtpTestResult(null)
-    if (preset === 'gmail') {
+    if (preset === 'hostinger') {
+      setSmtpHost('smtp.hostinger.com')
+      setSmtpPort(465)
+    } else if (preset === 'hostinger_tls') {
+      setSmtpHost('smtp.hostinger.com')
+      setSmtpPort(587)
+    } else if (preset === 'gmail') {
       setSmtpHost('smtp.gmail.com')
       setSmtpPort(587)
     } else if (preset === 'gmail_ssl') {
@@ -644,64 +650,69 @@ export default function App() {
           ==================================================================== */}
       <header className="top-navbar">
         <div className="nav-brand">
-          <div className="brand-symbol"></div>
+          <div className="brand-symbol">OS</div>
           <div className="brand-details">
             <span className="brand-heading">Outreach Scheduler</span>
+            <span className="brand-subtext">Automated B2B Lead Discovery &amp; Email Dispatch</span>
           </div>
         </div>
 
         <div className="nav-controls">
-          {status.mailbox.email && (
+          {status.mailbox.email ? (
             <div
               className="sender-pill configured"
-              title={`Active Campaign Sender: ${status.mailbox.email}`}
+              title={`Active Campaign Sender: ${status.mailbox.email} via ${status.mailbox.smtp_host || 'Hostinger'}`}
             >
               <span className="live-indicator"></span>
-              <span>{status.mailbox.email}</span>
+              <span>
+                {status.mailbox?.smtp_host?.toLowerCase().includes('hostinger') || smtpHost?.toLowerCase().includes('hostinger') ? '' : ''}
+                {status.mailbox.email}
+              </span>
+            </div>
+          ) : (
+            <div
+              className="sender-pill unconfigured"
+              onClick={() => { fetchSmtpSettings(); setIsSmtpModalOpen(true); }}
+              style={{ cursor: 'pointer', background: 'rgba(245, 158, 11, 0.12)', borderColor: 'rgba(245, 158, 11, 0.3)', color: '#fbbf24' }}
+              title="Click to configure sender SMTP"
+            >
+              
+              <span>Set Up SMTP Sender</span>
             </div>
           )}
 
-          {/* {status.ai?.is_configured && (
-            <div
-              className="sender-pill configured"
-              style={{ borderColor: 'rgba(168, 85, 247, 0.35)', background: 'rgba(168, 85, 247, 0.12)', color: '#c084fc' }}
-              title={`Groq LLM Active: ${status.ai.model} dynamically crafts personalized cold emails for each prospect`}
+          {(status.mailbox?.smtp_host?.toLowerCase().includes('hostinger') || smtpHost?.toLowerCase().includes('hostinger')) ? (
+            <a
+              href="https://mail.hostinger.com"
+              target="_blank"
+              rel="noreferrer"
+              className="nav-btn hostinger-link-btn"
+              title="Open Hostinger Webmail in new tab"
             >
-              <span className="live-indicator" style={{ background: '#a855f7', boxShadow: '0 0 8px #a855f7' }}></span>
-              <span>✨ Groq: {status.ai.model}</span>
-            </div>
-          )} */}
+              Hostinger Webmail
+            </a>
+          ) : (
+            <a
+              href="https://mail.google.com/mail/u/0/#inbox"
+              target="_blank"
+              rel="noreferrer"
+              className="nav-btn"
+              title="Open real Gmail Inbox"
+            >
+              Gmail Inbox
+            </a>
+          )}
 
           <button
             className="nav-btn btn-smtp-settings"
             onClick={() => { fetchSmtpSettings(); setIsSmtpModalOpen(true); }}
-            title="Configure custom SMTP mail server & credentials"
+            title="Configure Hostinger or custom SMTP mail server & credentials"
           >
-             SMTP Settings
+            SMTP Settings
           </button>
 
-          <a
-            href="https://mail.google.com/mail/u/0/#inbox"
-            target="_blank"
-            rel="noreferrer"
-            className="nav-btn"
-            title="Open real Gmail Inbox"
-          >
-             Gmail Inbox
-          </a>
-
-          <a
-            href="https://mail.google.com/mail/u/0/#sent"
-            target="_blank"
-            rel="noreferrer"
-            className="nav-btn"
-            title="Open real Gmail Sent folder"
-          >
-             Gmail Sent Box
-          </a>
-
-          <button className="nav-btn" onClick={fetchAllData} title="Refresh records">
-            ↻ Refresh
+          <button className="nav-btn" onClick={fetchAllData} title="Refresh records from database">
+            Refresh
           </button>
 
           <button
@@ -709,7 +720,7 @@ export default function App() {
             onClick={handleResetAllData}
             title="Delete all tables and start fresh"
           >
-             Fresh Start
+            Fresh Start
           </button>
         </div>
       </header>
@@ -724,7 +735,7 @@ export default function App() {
             <div className="status-badge-group">
               <div className={`scheduler-status-tag ${status.is_running ? 'active' : 'idle'}`}>
                 <span className="status-dot"></span>
-                <span>{status.is_running ? 'SCHEDULER RUNNING' : 'SCHEDULER STOPPED'}</span>
+                <span>{status.is_running ? 'AUTOPILOT RUNNING' : 'AUTOPILOT IDLE'}</span>
               </div>
 
               <div className="hero-meta">
@@ -734,7 +745,7 @@ export default function App() {
                   onClick={() => setActiveTab('campaigns')}
                   style={{ cursor: 'pointer' }}
                 >
-                   Campaigns Created: <strong>{status.summary?.total_campaigns_created ?? campaigns.length}</strong>
+                  Campaigns: <strong>{status.summary?.total_campaigns_created ?? campaigns.length}</strong>
                 </span>
                 <span
                   className="hero-stat-badge highlight-run"
@@ -742,11 +753,15 @@ export default function App() {
                   onClick={() => setActiveTab('campaigns')}
                   style={{ cursor: 'pointer' }}
                 >
-                   Campaigns Run: <strong>{status.summary?.total_campaigns_run ?? 0}</strong>
+                  Executed: <strong>{status.summary?.total_campaigns_run ?? 0}</strong>
                 </span>
-                <span>Cycles Completed: <strong>{status.total_runs}</strong></span>
+                <span className="hero-stat-badge" title="Total completed background cycles">
+                  Cycles: <strong>{status.total_runs}</strong>
+                </span>
                 {status.is_running && status.seconds_until_next_run !== null && (
-                  <span>Next Run: <strong>{status.seconds_until_next_run}s</strong></span>
+                  <span className="hero-stat-badge next-run-badge" style={{ background: 'rgba(245, 158, 11, 0.12)', borderColor: 'rgba(245, 158, 11, 0.35)', color: '#fde047' }}>
+                    Next Cycle: <strong>{status.seconds_until_next_run}s</strong>
+                  </span>
                 )}
               </div>
             </div>
@@ -757,7 +772,7 @@ export default function App() {
                 onClick={() => setIsCampaignModalOpen(true)}
                 title="Create and configure a new outreach campaign"
               >
-                 Create Campaign
+                New Campaign
               </button>
 
               <button
@@ -769,33 +784,99 @@ export default function App() {
                 }}
                 title="Edit and customize your email subject, body template, and preview"
               >
-                ✉️ Mail Editor
+                Mail Template
               </button>
 
               <button
                 className={`btn-toggle-scheduler ${status.is_running ? 'stop' : 'start'}`}
                 onClick={handleToggleScheduler}
+                title={status.is_running ? 'Pause automated background scheduler' : 'Start automated background scheduler'}
               >
-                {status.is_running ? '⏸ Stop Scheduler' : ' Start Scheduler'}
+                {status.is_running ? 'Pause Autopilot' : 'Start Autopilot'}
               </button>
 
               <button
                 className="btn-trigger-now"
                 disabled={isTriggering}
                 onClick={handleTriggerNow}
-                title="Execute 5-step cycle immediately without waiting for timer"
+                title="Execute 1 full 5-step cycle immediately on-demand"
               >
-                {isTriggering ? ' Running Cycle...' : ' Run Cycle Now'}
+                {isTriggering ? 'Running Cycle...' : 'Run Cycle Now'}
               </button>
             </div>
           </div>
 
+          {/* QUICK OUTREACH CONTROL CENTER (DIRECTLY ON DASHBOARD) */}
+          <div className="dashboard-quick-control">
+            <div className="quick-query-section">
+              <div className="quick-input-header">
+                <label className="quick-input-label">
+                  Target Industry Niche, City, or Keyword:
+                </label>
+                <span className="quick-input-subtext">Click Run Cycle Now or Start Autopilot to execute</span>
+              </div>
+              <div className="quick-search-input-wrap">
+                
+                <input
+                  type="text"
+                  className="quick-search-field"
+                  placeholder="e.g. Dentists in Chicago, IT companies in India, Real estate in Dubai, Ahmedabad Software..."
+                  value={editQuery}
+                  onChange={(e) => setEditQuery(e.target.value)}
+                />
+                {editQuery && (
+                  <button
+                    type="button"
+                    className="quick-clear-btn"
+                    onClick={() => setEditQuery('')}
+                    title="Clear search query"
+                  >
+                    &times;
+                  </button>
+                )}
+              </div>
 
+              {/* 1-Click Popular Presets */}
+              <div className="quick-presets-bar">
+                <span className="quick-presets-tag">Suggestions:</span>
+                {[
+                  { label: 'IT in India', query: 'IT companies in India', name: 'India IT Companies Outreach' },
+                  { label: 'Dentists in Chicago', query: 'Dentists in Chicago', name: 'Chicago Dentists Outreach' },
+                  { label: 'Real Estate Dubai', query: 'Real estate in Dubai', name: 'Dubai Real Estate Campaign' },
+                  { label: 'Medical Stores', query: 'Medical stores', name: 'Medical Stores Outreach Campaign' },
+                  { label: 'Canada Agencies', query: 'Marketing agencies in Canada', name: 'Canada Marketing Agencies Campaign' },
+                  { label: 'Software in USA', query: 'Software companies in USA', name: 'USA Software Companies Campaign' },
+                ].map((chip) => (
+                  <button
+                    key={chip.query}
+                    type="button"
+                    className={`quick-chip-button ${editQuery === chip.query ? 'selected' : ''}`}
+                    onClick={() => {
+                      setEditQuery(chip.query)
+                      setCampaignName(chip.name)
+                    }}
+                  >
+                    {chip.label}
+                  </button>
+                ))}
+              </div>
+            </div>
+          </div>
 
+          {/* User-Friendly Notification Banner */}
           {feedbackMsg && (
-            <div style={{ fontSize: '12px', color: '#a5b4fc', display: 'flex', alignItems: 'center', gap: '8px' }}>
-              <span>●</span>
-              <span>{feedbackMsg}</span>
+            <div className={`feedback-banner ${feedbackMsg.toLowerCase().includes('error') || feedbackMsg.toLowerCase().includes('failed') ? 'error' : 'success'}`}>
+              <div className="feedback-banner-content">
+                <span className="feedback-text">{feedbackMsg}</span>
+              </div>
+              <button
+                type="button"
+                className="feedback-dismiss-btn"
+                onClick={() => setFeedbackMsg('')}
+                title="Dismiss message"
+              >
+                &times;
+              </button>
             </div>
           )}
         </section>
@@ -808,38 +889,41 @@ export default function App() {
           <div
             className={`pipeline-step-node ${activeTab === 'accounts' ? 'selected' : ''}`}
             onClick={() => setActiveTab('accounts')}
+            title="Step 1: Scrapes real company domains matching target niche"
           >
-            {/* <div className="node-icon-circle step-1">🔍</div> */}
+            <div className="node-icon-circle step-1">1</div>
             <div className="node-content">
               <span className="node-step-tag">Step 1</span>
               <span className="node-title">Scrape Accounts</span>
-              <span className="node-count">{status.summary.step_1_scraped_accounts} scraped</span>
+              <span className="node-count">{status.summary.step_1_scraped_accounts} leads found</span>
             </div>
           </div>
 
-          <span className="pipeline-flow-arrow"> </span>
+          <span className="pipeline-flow-arrow">&rarr;</span>
 
           {/* STEP 2: FIND COUNT */}
           <div
             className={`pipeline-step-node ${activeTab === 'ready' ? 'selected' : ''}`}
             onClick={() => setActiveTab('ready')}
+            title="Step 2: Audits accounts and prepares uncontacted leads for outreach"
           >
-            {/* <div className="node-icon-circle step-2">📊</div> */}
+            <div className="node-icon-circle step-2">2</div>
             <div className="node-content">
               <span className="node-step-tag">Step 2</span>
-              <span className="node-title">Ready for Outreach</span>
-              <span className="node-count">{status.summary.step_2_found_accounts} ready to send</span>
+              <span className="node-title">Ready in Queue</span>
+              <span className="node-count">{accounts.filter(a => a.status === 'email_found').length} ready to send</span>
             </div>
           </div>
 
-          <span className="pipeline-flow-arrow"></span>
+          <span className="pipeline-flow-arrow">&rarr;</span>
 
           {/* STEP 3: SEND MAILS */}
           <div
             className={`pipeline-step-node ${activeTab === 'sent' ? 'selected' : ''}`}
             onClick={() => setActiveTab('sent')}
+            title="Step 3: Dispatches emails via Hostinger/SMTP and syncs to Sent folder"
           >
-            {/* <div className="node-icon-circle step-3">✉️</div> */}
+            <div className="node-icon-circle step-3">3</div>
             <div className="node-content">
               <span className="node-step-tag">Step 3</span>
               <span className="node-title">Send Mails</span>
@@ -847,14 +931,15 @@ export default function App() {
             </div>
           </div>
 
-          <span className="pipeline-flow-arrow"></span>
+          <span className="pipeline-flow-arrow">&rarr;</span>
 
           {/* STEP 4: UNDELIVERED */}
           <div
             className={`pipeline-step-node ${activeTab === 'undelivered' ? 'selected' : ''}`}
             onClick={() => setActiveTab('undelivered')}
+            title="Step 4: Detects bounces and suppresses invalid mailboxes"
           >
-            {/* <div className="node-icon-circle step-4">⚠️</div> */}
+            <div className="node-icon-circle step-4">4</div>
             <div className="node-content">
               <span className="node-step-tag">Step 4</span>
               <span className="node-title">Undelivered</span>
@@ -862,14 +947,15 @@ export default function App() {
             </div>
           </div>
 
-          <span className="pipeline-flow-arrow"></span>
+          <span className="pipeline-flow-arrow">&rarr;</span>
 
           {/* STEP 5: REPLIES */}
           <div
             className={`pipeline-step-node ${activeTab === 'replies' ? 'selected' : ''}`}
             onClick={() => setActiveTab('replies')}
+            title="Step 5: Scans inbox for prospect replies and updates status"
           >
-            {/* <div className="node-icon-circle step-5">💬</div> */}
+            <div className="node-icon-circle step-5">5</div>
             <div className="node-content">
               <span className="node-step-tag">Step 5</span>
               <span className="node-title">Find Replies</span>
@@ -888,7 +974,7 @@ export default function App() {
                 className={`tab-pill-btn ${activeTab === 'campaigns' ? 'active' : ''}`}
                 onClick={() => setActiveTab('campaigns')}
               >
-                <span> Campaigns</span>
+                <span>Campaigns</span>
                 <span className="tab-badge">{campaigns.length}</span>
               </button>
 
@@ -896,7 +982,7 @@ export default function App() {
                 className={`tab-pill-btn ${activeTab === 'accounts' ? 'active' : ''}`}
                 onClick={() => setActiveTab('accounts')}
               >
-                <span> Scraped Accounts</span>
+                <span>Scraped Accounts</span>
                 <span className="tab-badge">{accounts.length}</span>
               </button>
 
@@ -904,7 +990,7 @@ export default function App() {
                 className={`tab-pill-btn ${activeTab === 'ready' ? 'active' : ''}`}
                 onClick={() => setActiveTab('ready')}
               >
-                <span> Ready for Outreach</span>
+                <span>Ready for Outreach</span>
                 <span className="tab-badge" style={{ background: '#0284c7', color: '#fff' }}>
                   {accounts.filter(a => a.status === 'email_found').length}
                 </span>
@@ -914,7 +1000,7 @@ export default function App() {
                 className={`tab-pill-btn ${activeTab === 'sent' ? 'active' : ''}`}
                 onClick={() => setActiveTab('sent')}
               >
-                <span> Sent Mails</span>
+                <span>Sent Mails</span>
                 <span className="tab-badge">{sentMails.length}</span>
               </button>
 
@@ -922,7 +1008,7 @@ export default function App() {
                 className={`tab-pill-btn ${activeTab === 'undelivered' ? 'active' : ''}`}
                 onClick={() => setActiveTab('undelivered')}
               >
-                <span> Undelivered Mails</span>
+                <span>Undelivered</span>
                 <span className="tab-badge">{undeliveredMails.length}</span>
               </button>
 
@@ -930,7 +1016,7 @@ export default function App() {
                 className={`tab-pill-btn ${activeTab === 'replies' ? 'active' : ''}`}
                 onClick={() => setActiveTab('replies')}
               >
-                <span> Received Replies</span>
+                <span>Received Replies</span>
                 <span className="tab-badge">{replies.length}</span>
               </button>
 
@@ -938,19 +1024,30 @@ export default function App() {
                 className={`tab-pill-btn ${activeTab === 'runs' ? 'active' : ''}`}
                 onClick={() => setActiveTab('runs')}
               >
-                <span> Run History &amp; Logs</span>
+                <span>Run Logs</span>
                 <span className="tab-badge">{runs.length}</span>
               </button>
             </div>
 
             <div className="filter-search-box">
+              
               <input
                 type="text"
                 className="filter-search-input"
-                placeholder="Search records..."
+                placeholder="Filter table rows..."
                 value={searchQuery}
                 onChange={(e) => setSearchQuery(e.target.value)}
               />
+              {searchQuery && (
+                <button
+                  type="button"
+                  className="filter-search-clear-btn"
+                  onClick={() => setSearchQuery('')}
+                  title="Clear filter"
+                >
+                  &times;
+                </button>
+              )}
             </div>
           </div>
 
@@ -1183,10 +1280,10 @@ export default function App() {
                               </span>
                             ) : (acc.status === 'replies' || acc.status === 'replied') ? (
                               <span style={{ color: '#fbbf24', fontSize: '12px', fontWeight: 600 }}>
-                                💬 Replies
+                                Replies
                               </span>
                             ) : (
-                              <span className="text-sent-done">✓ Sent</span>
+                              <span className="text-sent-done">Sent</span>
                             )}
                           </td>
                         </tr>
@@ -1258,7 +1355,7 @@ export default function App() {
                           <td style={{ color: '#38bdf8', fontWeight: 600 }}>{acc.email}</td>
                           <td>
                             <span style={{ background: 'rgba(99, 102, 241, 0.15)', color: '#a5b4fc', padding: '3px 8px', borderRadius: '4px', fontSize: '12px' }}>
-                              📍 {acc.city || 'Global'}
+                              {acc.city || 'Global'}
                             </span>
                           </td>
                           <td>
@@ -1504,7 +1601,7 @@ export default function App() {
                 {selectedRecord.type === 'reply' && 'Lead Reply Message'}
                 {selectedRecord.type === 'run' && `Scheduler Cycle #${selectedRecord.data.run_number}`}
               </h3>
-              <button className="btn-close-modal-x" onClick={() => setSelectedRecord(null)}>✕</button>
+              <button className="btn-close-modal-x" onClick={() => setSelectedRecord(null)} title="Close">&times;</button>
             </div>
 
             <div className="modal-dialog-body">
@@ -1627,7 +1724,7 @@ export default function App() {
                 onClick={() => setIsCampaignModalOpen(false)}
                 title="Close"
               >
-                ✕
+                &times;
               </button>
             </div>
 
@@ -1665,14 +1762,14 @@ export default function App() {
                   <div className="quick-presets-strip">
                     <span className="presets-label">Popular Targets:</span>
                     {[
-                      { label: '🇮🇳 IT in India', query: 'IT companies in India', name: 'India IT Companies Outreach' },
-                      { label: '🇺🇸 Dentists in Chicago', query: 'Dentists in Chicago', name: 'Chicago Dentists Outreach' },
-                      { label: '🇺🇸 Software in USA', query: 'Software companies in USA', name: 'USA Software Companies Campaign' },
-                      { label: '🇦🇪 Real Estate Dubai', query: 'Real estate in Dubai', name: 'Dubai Real Estate Campaign' },
-                      { label: '🇮🇳 Ahmedabad Software', query: 'Ahmedabad software companies', name: 'Ahmedabad Tech Outreach' },
-                      { label: '🇮🇳 Surat Textile', query: 'Surat textile', name: 'Surat Textile Industry Campaign' },
-                      { label: '🇨🇦 Canada Agencies', query: 'Marketing agencies in Canada', name: 'Canada Marketing Agencies Campaign' },
-                      { label: '🏥 Medical stores', query: 'Medical stores', name: 'Medical Stores Outreach Campaign' },
+                      { label: 'IT in India', query: 'IT companies in India', name: 'India IT Companies Outreach' },
+                      { label: 'Dentists in Chicago', query: 'Dentists in Chicago', name: 'Chicago Dentists Outreach' },
+                      { label: 'Software in USA', query: 'Software companies in USA', name: 'USA Software Companies Campaign' },
+                      { label: 'Real Estate Dubai', query: 'Real estate in Dubai', name: 'Dubai Real Estate Campaign' },
+                      { label: 'Ahmedabad Software', query: 'Ahmedabad software companies', name: 'Ahmedabad Tech Outreach' },
+                      { label: 'Surat Textile', query: 'Surat textile', name: 'Surat Textile Industry Campaign' },
+                      { label: 'Canada Agencies', query: 'Marketing agencies in Canada', name: 'Canada Marketing Agencies Campaign' },
+                      { label: 'Medical stores', query: 'Medical stores', name: 'Medical Stores Outreach Campaign' },
                     ].map((preset) => (
                       <button
                         key={preset.query}
@@ -1702,11 +1799,11 @@ export default function App() {
                     <label className="form-label">Scrape Count</label>
                     <input
                       type="number"
-                      min="1"
+                      min="0"
                       max="50"
                       className="campaign-form-input"
                       value={editScrapeBatch}
-                      onChange={(e) => setEditScrapeBatch(Math.max(1, parseInt(e.target.value) || 1))}
+                      onChange={(e) => setEditScrapeBatch(Math.max(0, parseInt(e.target.value) || 0))}
                     />
                     <span className="field-hint">Leads scraped per cycle</span>
                   </div>
@@ -1715,11 +1812,11 @@ export default function App() {
                     <label className="form-label">Send Count</label>
                     <input
                       type="number"
-                      min="1"
+                      min="0"
                       max="50"
                       className="campaign-form-input"
                       value={editSendBatch}
-                      onChange={(e) => setEditSendBatch(Math.max(1, parseInt(e.target.value) || 1))}
+                      onChange={(e) => setEditSendBatch(Math.max(0, parseInt(e.target.value) || 0))}
                     />
                     <span className="field-hint">Emails sent per cycle</span>
                   </div>
@@ -1817,7 +1914,7 @@ export default function App() {
                 {/* Sender verification pill */}
                 {status.mailbox.email ? (
                   <div className="campaign-sender-note">
-                    <span className="sender-note-icon">🟢</span>
+                    
                     <div style={{ flex: 1, minWidth: 0 }}>
                       <span>Active Campaign Sender: <strong>{status.mailbox.email}</strong> {status.mailbox.name ? `(${status.mailbox.name})` : ''} · {status.mailbox.smtp_host}</span>
                     </div>
@@ -1900,7 +1997,7 @@ export default function App() {
             <div className="campaign-modal-header" style={{ background: 'linear-gradient(180deg, #1e1b4b, #0f172a)' }}>
               <div className="campaign-header-left">
                 <div className="campaign-icon-badge" style={{ background: 'linear-gradient(135deg, #6366f1, #a855f7)', color: '#fff' }}>
-                  ✉️
+                  
                 </div>
                 <div>
                   <h3 className="campaign-modal-title">Mail Editor</h3>
@@ -1915,7 +2012,7 @@ export default function App() {
                 onClick={() => setIsMailEditorOpen(false)}
                 title="Close"
               >
-                ✕
+                &times;
               </button>
             </div>
 
@@ -2079,7 +2176,7 @@ export default function App() {
                   disabled={isSavingTemplate}
                   onClick={handleSaveMailTemplate}
                 >
-                  {isSavingTemplate ? 'Saving...' : '✓ Save & Apply Template'}
+                  {isSavingTemplate ? 'Saving...' : 'Save & Apply Template'}
                 </button>
               </div>
             </div>
@@ -2112,7 +2209,7 @@ export default function App() {
                 onClick={() => setIsSmtpModalOpen(false)}
                 title="Close"
               >
-                ✕
+                &times;
               </button>
             </div>
 
@@ -2122,6 +2219,24 @@ export default function App() {
               <div className="smtp-presets-card">
                 <span className="smtp-presets-label"> Quick Presets:</span>
                 <div className="smtp-presets-list">
+                  <button
+                    type="button"
+                    className={`smtp-preset-chip hostinger-preset ${smtpHost === 'smtp.hostinger.com' && Number(smtpPort) === 465 ? 'active' : ''}`}
+                    onClick={() => applySmtpPreset('hostinger')}
+                    style={{ borderColor: 'rgba(168, 85, 247, 0.45)', color: '#d8b4fe', fontWeight: 700 }}
+                    title="Hostinger Mail with SSL (Port 465 - Recommended by Hostinger)"
+                  >
+                    Hostinger Mail (SSL 465)
+                  </button>
+                  <button
+                    type="button"
+                    className={`smtp-preset-chip hostinger-preset ${smtpHost === 'smtp.hostinger.com' && Number(smtpPort) === 587 ? 'active' : ''}`}
+                    onClick={() => applySmtpPreset('hostinger_tls')}
+                    style={{ borderColor: 'rgba(168, 85, 247, 0.45)', color: '#d8b4fe' }}
+                    title="Hostinger Mail with STARTTLS (Port 587)"
+                  >
+                    Hostinger Mail (TLS 587)
+                  </button>
                   <button
                     type="button"
                     className={`smtp-preset-chip ${smtpHost === 'smtp.gmail.com' && Number(smtpPort) === 587 ? 'active' : ''}`}
@@ -2175,9 +2290,9 @@ export default function App() {
                       className="campaign-form-input"
                       value={smtpHost}
                       onChange={(e) => { setSmtpHost(e.target.value); setSmtpTestResult(null); }}
-                      placeholder="e.g. smtp.gmail.com or smtp.office365.com"
+                      placeholder="e.g. smtp.hostinger.com or smtp.gmail.com"
                     />
-                    <span className="field-hint">Mail server domain or IP address</span>
+                    <span className="field-hint">Hostinger: smtp.hostinger.com | Gmail: smtp.gmail.com</span>
                   </div>
 
                   <div className="form-group">
@@ -2187,9 +2302,9 @@ export default function App() {
                       className="campaign-form-input"
                       value={smtpPort}
                       onChange={(e) => { setSmtpPort(Number(e.target.value)); setSmtpTestResult(null); }}
-                      placeholder="587, 465, or 25"
+                      placeholder="465 or 587"
                     />
-                    <span className="field-hint">587 (TLS/STARTTLS) or 465 (SSL)</span>
+                    <span className="field-hint">465 (SSL - Hostinger Recommended) or 587 (TLS)</span>
                   </div>
                 </div>
               </div>
@@ -2209,9 +2324,9 @@ export default function App() {
                       className="campaign-form-input"
                       value={smtpUsername}
                       onChange={(e) => { setSmtpUsername(e.target.value); setSmtpTestResult(null); }}
-                      placeholder="e.g. user@yourdomain.com"
+                      placeholder="e.g. info@yourdomain.com (Full email)"
                     />
-                    <span className="field-hint">Your SMTP login username / email</span>
+                    <span className="field-hint">For Hostinger, enter your full email address</span>
                   </div>
 
                   <div className="form-group">
@@ -2222,7 +2337,7 @@ export default function App() {
                         className="campaign-form-input"
                         value={smtpPassword}
                         onChange={(e) => { setSmtpPassword(e.target.value); setSmtpTestResult(null); }}
-                        placeholder="SMTP or Google App Password"
+                        placeholder="Hostinger mailbox password or Gmail App Password"
                       />
                       <button
                         type="button"
@@ -2230,10 +2345,10 @@ export default function App() {
                         onClick={() => setShowSmtpPassword(!showSmtpPassword)}
                         title={showSmtpPassword ? 'Hide password' : 'Show password'}
                       >
-                        {showSmtpPassword ? '👁️‍🗨️' : '👁️'}
+                        {showSmtpPassword ? 'Hide' : 'Show'}
                       </button>
                     </div>
-                    <span className="field-hint">For Gmail, use 16-character App Password</span>
+                    <span className="field-hint">Hostinger Webmail password or 16-char Gmail App Password</span>
                   </div>
                 </div>
 
@@ -2249,12 +2364,26 @@ export default function App() {
                   <span className="field-hint">Display name shown to recipients in their email inbox</span>
                 </div>
 
+                {/* Helpful Note for Hostinger Users */}
+                <div className="smtp-info-box" style={{ background: 'rgba(168, 85, 247, 0.12)', border: '1px solid rgba(168, 85, 247, 0.35)', color: '#e9d5ff', marginTop: '10px' }}>
+                  
+                  <div style={{ display: 'flex', flexDirection: 'column', gap: '3px' }}>
+                    <span style={{ fontWeight: 700, color: '#f3e8ff' }}>Hostinger Mail Configuration:</span>
+                    <span style={{ fontSize: '11.5px', lineHeight: 1.5, color: '#d8b4fe' }}>
+                      • <strong>SMTP Server:</strong> <code>smtp.hostinger.com</code> | <strong>Port:</strong> <code>465</code> (SSL) or <code>587</code> (TLS)<br/>
+                      • <strong>IMAP Server (for replies):</strong> <code>imap.hostinger.com</code>:<code>993</code> (auto-configured)<br/>
+                      • <strong>Username:</strong> Your full Hostinger email address (e.g. <code>info@yourdomain.com</code>)<br/>
+                      • <strong>Password:</strong> Your Hostinger mailbox password (<a href="https://mail.hostinger.com" target="_blank" rel="noreferrer" style={{ color: '#c084fc', textDecoration: 'underline' }}>Hostinger Webmail</a> login)
+                    </span>
+                  </div>
+                </div>
+
                 {/* Helpful Note for Gmail Users */}
-                <div className="smtp-info-box">
-                  <span className="info-icon"></span>
+                <div className="smtp-info-box" style={{ marginTop: '8px' }}>
+                  
                   <span>
-                    <strong>Gmail Notice:</strong> If your account has 2-Step Verification enabled, generate an
-                    <strong> App Password</strong> at <code>myaccount.google.com/apppasswords</code> and enter it above.
+                    <strong>Gmail Notice:</strong> If using Gmail with 2-Step Verification, generate a 16-character
+                    <strong> App Password</strong> at <code>myaccount.google.com/apppasswords</code>.
                   </span>
                 </div>
               </div>
@@ -2262,14 +2391,14 @@ export default function App() {
               {/* Test Connection Result Box */}
               {smtpTesting && (
                 <div className="smtp-test-status loading">
-                  <span className="spinner-mini">⏳</span>
+                  
                   <span>Connecting to {smtpHost}:{smtpPort} and verifying credentials...</span>
                 </div>
               )}
 
               {smtpTestResult && !smtpTesting && (
                 <div className={`smtp-test-status ${smtpTestResult.success ? 'success' : 'error'}`}>
-                  <span>{smtpTestResult.success ? '✅' : '❌'}</span>
+                  <span>{smtpTestResult.success ? '[OK] ' : '[Error] '}</span>
                   <span>{smtpTestResult.message}</span>
                 </div>
               )}

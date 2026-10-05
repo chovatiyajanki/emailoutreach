@@ -40,20 +40,35 @@ async def scheduler_loop():
 
                 if is_due:
                     _is_cycle_in_progress = True
-                    print(f"⏰ Scheduler Interval Triggered! Running cycle #{config.total_runs + 1}...")
+                    print(f"[Scheduler] Interval Triggered! Running cycle #{config.total_runs + 1}...")
                     try:
                         # Run the 5-step pipeline cycle
                         run_scheduler_cycle(db)
                     except Exception as e:
-                        print(f"❌ Error in scheduler cycle execution: {e}")
+                        print(f"[Scheduler] Error in scheduler cycle execution: {e}")
                     finally:
                         _is_cycle_in_progress = False
 
         except asyncio.CancelledError:
-            print("🛑 Scheduler Worker task cancelled.")
+            print("[Scheduler] Worker task cancelled.")
             break
         except Exception as e:
-            print(f"⚠️ Scheduler Worker loop error: {e}")
+            err_msg = str(e).lower()
+            if "relation \"scheduler_config\" does not exist" in err_msg or "undefinedtable" in err_msg:
+                print("[Scheduler] scheduler_config table missing! Auto-initializing PostgreSQL tables...")
+                try:
+                    from .database import Base, engine
+                    Base.metadata.create_all(bind=engine)
+                    with SessionLocal() as db_fix:
+                        cfg = db_fix.query(SchedulerConfig).filter(SchedulerConfig.id == 1).first()
+                        if not cfg:
+                            db_fix.add(SchedulerConfig(id=1, is_running=False, interval_seconds=60, search_query="B2B Software and Tech Companies", scrape_batch_size=5, send_batch_size=5, total_runs=0))
+                            db_fix.commit()
+                    print("[Scheduler] Database tables and default SchedulerConfig created successfully!")
+                except Exception as auto_init_err:
+                    print(f"[Scheduler] Auto-init error: {auto_init_err}")
+            else:
+                print(f"[Scheduler] Worker loop error: {e}")
             await asyncio.sleep(5)
 
 

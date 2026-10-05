@@ -142,13 +142,37 @@ Body:
     return base_subject, base_body, False
 
 
-def sync_to_gmail_sent_mail(to_email: str, subject: str, body: str, config: Optional[SchedulerConfig] = None) -> bool:
-    """Synchronizes message directly into [Gmail]/Sent Mail folder via IMAP"""
+def resolve_imap_settings(config: Optional[SchedulerConfig] = None) -> tuple:
+    """Resolves IMAP host and port from config or environment, dynamically supporting Hostinger, Gmail, Outlook, etc."""
+    env_host = os.getenv("IMAP_HOST")
+    env_port = int(os.getenv("IMAP_PORT", 993))
+    if env_host:
+        return env_host, env_port
+
+    smtp_host = (config.smtp_host or "").lower().strip() if config else ""
+    if "hostinger" in smtp_host:
+        return "imap.hostinger.com", 993
+    elif "gmail" in smtp_host:
+        return "imap.gmail.com", 993
+    elif "office365" in smtp_host or "outlook" in smtp_host:
+        return "outlook.office365.com", 993
+    elif "yahoo" in smtp_host:
+        return "imap.mail.yahoo.com", 993
+    elif smtp_host.startswith("smtp."):
+        return smtp_host.replace("smtp.", "imap.", 1), 993
+
+    user = (config.smtp_username or "").lower() if config else ""
+    if "hostinger" in user:
+        return "imap.hostinger.com", 993
+    return "imap.gmail.com", 993
+
+
+def sync_to_sent_mail(to_email: str, subject: str, body: str, config: Optional[SchedulerConfig] = None) -> bool:
+    """Synchronizes message directly into Sent Mail folder via IMAP (supports Hostinger, Gmail, etc.)"""
     if not config or not config.smtp_username or not config.smtp_password:
         return False
 
-    imap_host = os.getenv("IMAP_HOST", "imap.gmail.com")
-    imap_port = int(os.getenv("IMAP_PORT", 993))
+    imap_host, imap_port = resolve_imap_settings(config)
     imap_user = config.smtp_username
     imap_pass = config.smtp_password
     sender_name = config.sender_name or imap_user
@@ -173,11 +197,25 @@ def sync_to_gmail_sent_mail(to_email: str, subject: str, body: str, config: Opti
         with imaplib.IMAP4_SSL(imap_host, imap_port, timeout=10) as mail:
             mail.login(imap_user, imap_pass)
             raw_bytes = msg.as_bytes()
-            res, _ = mail.append('"[Gmail]/Sent Mail"', '\\Seen', imaplib.Time2Internaldate(time.time()), raw_bytes)
-            return res == "OK"
+
+            if "hostinger" in imap_host.lower():
+                candidates = ['INBOX.Sent', 'Sent', 'INBOX/Sent', '"Sent"']
+            else:
+                candidates = ['"[Gmail]/Sent Mail"', 'INBOX.Sent', 'Sent', '"Sent"', '"INBOX.Sent"']
+
+            for folder in candidates:
+                try:
+                    res, _ = mail.append(folder, '\\Seen', imaplib.Time2Internaldate(time.time()), raw_bytes)
+                    if res == "OK":
+                        return True
+                except Exception:
+                    continue
+        return False
     except Exception as e:
         print(f"IMAP sent mail sync error: {e}")
         return False
+
+sync_to_gmail_sent_mail = sync_to_sent_mail
 
 
 def sync_to_gmail_inbox(from_email: str, subject: str, body: str, config: Optional[SchedulerConfig] = None) -> bool:
@@ -185,8 +223,7 @@ def sync_to_gmail_inbox(from_email: str, subject: str, body: str, config: Option
     if not config or not config.smtp_username or not config.smtp_password:
         return False
 
-    imap_host = os.getenv("IMAP_HOST", "imap.gmail.com")
-    imap_port = int(os.getenv("IMAP_PORT", 993))
+    imap_host, imap_port = resolve_imap_settings(config)
     imap_user = config.smtp_username
     imap_pass = config.smtp_password
 
@@ -319,11 +356,11 @@ def dispatch_gmail_smtp(to_email: str, subject: str, body: str, config: Optional
         else:
             delivery_note = f"SMTP error: {e}"
 
-    # 2. If using Gmail, synchronize message into [Gmail]/Sent Mail ONLY IF NOT BLOCKED
-    if not is_blocked and "gmail.com" in smtp_host.lower():
-        synced = sync_to_gmail_sent_mail(to_email, subject, body, config=config)
+    # 2. Synchronize message into Sent Mail folder via IMAP ONLY IF NOT BLOCKED
+    if not is_blocked:
+        synced = sync_to_sent_mail(to_email, subject, body, config=config)
         if synced and not smtp_success:
-            delivery_note += " (Synchronized to Gmail Sent Mailbox)"
+            delivery_note += " (Synchronized to Sent Mailbox)"
     else:
         synced = False
 
@@ -350,12 +387,11 @@ def decode_mime_header(header_value: str) -> str:
 
 
 def check_inbound_gmail_replies(config: Optional[SchedulerConfig] = None) -> List[Dict[str, Any]]:
-    """Checks configured mail account via IMAP for recent replies to outreach emails and detects Google message blocked notices"""
+    """Checks configured mail account (Hostinger, Gmail, etc.) via IMAP for recent replies to outreach emails and detects message blocked notices"""
     if not config or not config.smtp_username or not config.smtp_password:
         return []
 
-    imap_host = os.getenv("IMAP_HOST", "imap.gmail.com")
-    imap_port = int(os.getenv("IMAP_PORT", 993))
+    imap_host, imap_port = resolve_imap_settings(config)
     imap_user = config.smtp_username
     imap_pass = config.smtp_password
 

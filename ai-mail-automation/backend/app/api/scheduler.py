@@ -691,7 +691,7 @@ def get_scheduler_status(db: Session = Depends(get_db)):
         "mailbox": {
             "email": config.smtp_username or "",
             "name": config.sender_name or "",
-            "smtp_host": f"{config.smtp_host or 'smtp.gmail.com'}:{config.smtp_port or 587}" if (config.smtp_username and config.smtp_password) else "",
+            "smtp_host": f"{config.smtp_host or 'smtp.hostinger.com'}:{config.smtp_port or 465}" if (config.smtp_username and config.smtp_password) else "",
             "is_configured": bool(config.smtp_username and config.smtp_password),
             "status": "connected_live" if (config.smtp_username and config.smtp_password) else "not_configured",
         },
@@ -994,8 +994,8 @@ def get_smtp_settings(db: Session = Depends(get_db)):
     """Fetches currently configured manual SMTP server settings from PostgreSQL"""
     config = db.query(SchedulerConfig).filter(SchedulerConfig.id == 1).first()
     return {
-        "smtp_host": (config.smtp_host if config and config.smtp_host else "") or "smtp.gmail.com",
-        "smtp_port": (config.smtp_port if config and config.smtp_port else 587),
+        "smtp_host": (config.smtp_host if config and config.smtp_host else "") or "smtp.hostinger.com",
+        "smtp_port": (config.smtp_port if config and config.smtp_port else 465),
         "smtp_username": (config.smtp_username if config and config.smtp_username else ""),
         "smtp_password": (config.smtp_password if config and config.smtp_password else ""),
         "sender_name": (config.sender_name if config and config.sender_name else ""),
@@ -1062,16 +1062,29 @@ def test_smtp_connection(payload: SmtpTestRequest):
             server.login(user, pwd)
             server.quit()
 
+        # Check IMAP inbound for Hostinger/Gmail/generic host
+        imap_status_msg = ""
+        try:
+            import imaplib
+            imap_host_test = "imap.hostinger.com" if "hostinger" in host.lower() else ("imap.gmail.com" if "gmail" in host.lower() else (host.replace("smtp.", "imap.") if host.startswith("smtp.") else None))
+            if imap_host_test:
+                with imaplib.IMAP4_SSL(imap_host_test, 993, timeout=5) as imap_server:
+                    imap_server.login(user, pwd)
+                    imap_status_msg = f" • Verified inbound IMAP on {imap_host_test}:993 (ready to receive prospect replies)."
+        except Exception as e:
+            print(f"IMAP handshake note: {e}")
+
         return {
             "success": True,
-            "message": f"Connection verified successfully! Authenticated with {host}:{port} as '{user}'."
+            "message": f"Connection verified successfully! Authenticated with {host}:{port} as '{user}'.{imap_status_msg}"
         }
-    except smtplib.SMTPAuthenticationError as auth_err:
+    except smtplib.SMTPAuthenticationError:
+        extra_hint = " For Hostinger, ensure you enter your full email address (e.g. info@yourdomain.com) and your Hostinger mailbox password." if "hostinger" in host.lower() else ""
         return {
             "success": False,
-            "message": f"SMTP Authentication Error (535): Invalid username or password for {host}."
+            "message": f"SMTP Authentication Error (535): Invalid username or password for {host}.{extra_hint}"
         }
-    except smtplib.SMTPConnectError as conn_err:
+    except smtplib.SMTPConnectError:
         return {
             "success": False,
             "message": f"SMTP Connection Error: Could not establish connection to {host}:{port}."

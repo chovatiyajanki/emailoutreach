@@ -543,7 +543,7 @@ def run_scheduler_cycle(
     db.add(current_run)
     db.commit()
 
-    log(f"🚀 SCHEDULER CYCLE #{run_number} STARTED for Campaign: '{target_campaign.name}'")
+    log(f"SCHEDULER CYCLE #{run_number} STARTED for Campaign: '{target_campaign.name}'")
     log(f"Configuration: Query='{query_str}', Scrape Count={scrape_count_target}, Send Count={send_count_target}")
 
     # =========================================================================
@@ -604,7 +604,7 @@ def run_scheduler_cycle(
     db.commit()
     scraped_count = len(scraped_accounts_batch)
     current_run.scraped_count = scraped_count
-    log(f"✓ Step 1 Complete: Scraped {scraped_count} unique verified company accounts (strictly 1 lead per company).")
+    log(f"Step 1 Complete: Scraped {scraped_count} unique verified company accounts (strictly 1 lead per company).")
 
     # =========================================================================
     # STEP 2: FIND HOW MANY MAIL ACCOUNTS ARE SCRAPED & READY
@@ -613,7 +613,7 @@ def run_scheduler_cycle(
     total_scraped_accounts = db.query(CompanyMailAccount).count()
     ready_accounts = db.query(CompanyMailAccount).filter(CompanyMailAccount.status == "email_found").count()
     current_run.found_count = scraped_count
-    log(f"✓ Step 2 Complete: Found {scraped_count} new unique company accounts in this cycle.")
+    log(f"Step 2 Complete: Found {scraped_count} new unique company accounts in this cycle.")
     log(f"  Total Accounts in Database: {total_scraped_accounts} | Available for Outreach: {ready_accounts}")
 
     # =========================================================================
@@ -726,7 +726,7 @@ def run_scheduler_cycle(
             acc.company_name, acc.website, acc_email,
             contacted_emails, contacted_domains, contacted_names
         ):
-            log(f"  🛑 Safety Guard: Skipping {acc.company_name} ({acc.email}) - company already received an email.")
+            log(f"  Safety Guard: Skipping {acc.company_name} ({acc.email}) - company already received an email.")
             acc.status = "already_contacted"
             continue
 
@@ -764,7 +764,7 @@ def run_scheduler_cycle(
         # Groq automatic rewriting during email dispatch is completely disabled.
         subj = base_subj
         body = base_body
-        log(f"  ✉️ Dispatching 100% exact campaign copy to {acc.email}: \"{subj}\"")
+        log(f"  Dispatching 100% exact campaign copy to {acc.email}: \"{subj}\"")
 
         # Dispatch live via configured SMTP and sync to Gmail Sent Mailbox if Gmail
         live_sent, delivery_note, is_blocked = dispatch_gmail_smtp(acc.email, subj, body, config=config)
@@ -774,7 +774,7 @@ def run_scheduler_cycle(
         if is_blocked:
             item_status = "blocked_message"
             acc.status = "blocked_message"
-            log(f"  🛑 Google message blocked for <{acc.email}>! Status set to 'blocked message'. Diagnostic: {delivery_note}")
+            log(f"  Google message blocked for <{acc.email}>! Status set to 'blocked message'. Diagnostic: {delivery_note}")
 
             undelivered_item = UndeliveredMail(
                 sent_mail_id=None,
@@ -822,7 +822,7 @@ def run_scheduler_cycle(
     db.commit()
     sent_count = len(sent_records)
     current_run.sent_count = sent_count
-    log(f"✓ Step 3 Complete: Processed {sent_count} emails (Sender: {sender_email}).")
+    log(f"Step 3 Complete: Processed {sent_count} emails (Sender: {sender_email}).")
 
     # =========================================================================
     # STEP 4: FIND THE UNDELIVERED MAILS
@@ -859,12 +859,12 @@ def run_scheduler_cycle(
             ))
 
         undelivered_records.append(undelivered_item)
-        log(f"  ⚠️ Undelivered mail found: <{bounce_candidate.to_email}> (Status: 550 5.1.1). Added to suppression list.")
+        log(f"  Undelivered mail found: <{bounce_candidate.to_email}> (Status: 550 5.1.1). Added to suppression list.")
 
     db.commit()
     undelivered_count = len(undelivered_records)
     current_run.undelivered_count = undelivered_count
-    log(f"✓ Step 4 Complete: Found {undelivered_count} undelivered/blocked emails.")
+    log(f"Step 4 Complete: Found {undelivered_count} undelivered/blocked emails.")
 
     # =========================================================================
     # STEP 5: FIND SENDED MAILS REPLIES (ARE THERE OR NOT)
@@ -899,7 +899,7 @@ def run_scheduler_cycle(
                     )
                     db.add(undeliv)
                     db.add(SuppressionList(email=blocked_target, reason="Google message blocked"))
-                    log(f"  🛑 Google message blocked notice in inbox for <{blocked_target}>. Status set to 'blocked message'.")
+                    log(f"  Google message blocked notice in inbox for <{blocked_target}>. Status set to 'blocked message'.")
                 continue
 
             clean_from_match = re.search(r'[\w\.-]+@[\w\.-]+', rr["from_email"])
@@ -994,19 +994,19 @@ def run_scheduler_cycle(
                     target_campaign.total_replies += 1
 
                 comp_name = comp_acc.company_name if comp_acc else from_addr
-                log(f"  💬 Actual company reply received from {comp_name} <{from_addr}>: \"{rr['subject']}\" (Status: replies)")
+                log(f"  Actual company reply received from {comp_name} <{from_addr}>: \"{rr['subject']}\" (Status: replies)")
             else:
                 comp_name = comp_acc.company_name if comp_acc else from_addr
-                log(f"  ✓ Confirmed actual company reply from {comp_name} <{from_addr}> (Status: replies).")
+                log(f"  Confirmed actual company reply from {comp_name} <{from_addr}> (Status: replies).")
 
     db.commit()
     replies_count = len(replies_found)
     current_run.replies_count = replies_count
     
     if replies_count > 0:
-        log(f"✓ Step 5 Complete: Found {replies_count} replies to sent outreach emails.")
+        log(f"Step 5 Complete: Found {replies_count} replies to sent outreach emails.")
     else:
-        log("✓ Step 5 Complete: No new replies detected in this cycle.")
+        log("Step 5 Complete: No new replies detected in this cycle.")
 
     # =========================================================================
     # FINALIZE RUN RECORD
@@ -1031,7 +1031,7 @@ def run_scheduler_cycle(
     target_campaign.updated_at = completed_at
     db.commit()
 
-    log(f"🏁 SCHEDULER CYCLE #{run_number} FINISHED SUCCESSFULLY for Campaign '{target_campaign.name}'")
+    log(f"SCHEDULER CYCLE #{run_number} FINISHED SUCCESSFULLY for Campaign '{target_campaign.name}'")
 
     return {
         "success": True,

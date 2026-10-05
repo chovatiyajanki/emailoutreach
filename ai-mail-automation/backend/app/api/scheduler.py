@@ -330,7 +330,7 @@ def manual_send_emails(payload: Optional[SendMailRequest] = None, db: Session = 
         sent_count=0,
         undelivered_count=0,
         replies_count=0,
-        logs=[f"[{datetime.now().strftime('%H:%M:%S')}] ✉️ Send Mail action triggered for {len(accounts_to_contact)} accounts."],
+        logs=[f"[{datetime.now().strftime('%H:%M:%S')}] Send Mail action triggered for {len(accounts_to_contact)} accounts."],
     )
     db.add(new_run)
     db.commit()
@@ -641,7 +641,16 @@ def get_scheduler_status(db: Session = Depends(get_db)):
     # Aggregates across PostgreSQL tables
     total_scraped = db.query(func.count(CompanyMailAccount.id)).scalar() or 0
     ready_accounts = db.query(func.count(CompanyMailAccount.id)).filter(CompanyMailAccount.status == "email_found").scalar() or 0
-    total_sent = db.query(func.count(SentMail.id)).scalar() or 0
+    total_sent_all = db.query(func.count(SentMail.id)).scalar() or 0
+    total_sent_success = db.query(func.count(SentMail.id)).filter(SentMail.status.in_(["sent", "replied", "replies"])).scalar() or 0
+    total_bounced = db.query(func.count(UndeliveredMail.id)).filter(
+        ~UndeliveredMail.error_code.ilike("%blocked%"),
+        ~UndeliveredMail.bounce_reason.ilike("%blocked%")
+    ).scalar() or 0
+    total_blocked = db.query(func.count(UndeliveredMail.id)).filter(
+        (UndeliveredMail.error_code.ilike("%blocked%")) |
+        (UndeliveredMail.bounce_reason.ilike("%blocked%"))
+    ).scalar() or 0
     total_undelivered = db.query(func.count(UndeliveredMail.id)).scalar() or 0
     total_replies = db.query(func.count(MailReply.id)).scalar() or 0
     total_suppressed = db.query(func.count(SuppressionList.id)).scalar() or 0
@@ -681,7 +690,10 @@ def get_scheduler_status(db: Session = Depends(get_db)):
         "summary": {
             "step_1_scraped_accounts": total_scraped,
             "step_2_found_accounts": ready_accounts,
-            "step_3_sent_emails": total_sent,
+            "step_3_sent_emails": total_sent_success,
+            "step_3_total_attempts": total_sent_all,
+            "step_4_bounced_emails": total_bounced,
+            "step_4_blocked_emails": total_blocked,
             "step_4_undelivered_emails": total_undelivered,
             "step_5_replies_found": total_replies,
             "suppressed_count": total_suppressed,
@@ -894,13 +906,22 @@ def get_company_accounts(limit: int = 100, db: Session = Depends(get_db)):
 
 
 @router.get("/data/sent")
-def get_sent_emails(limit: int = 100, db: Session = Depends(get_db)):
-    items = (
-        db.query(SentMail)
-        .order_by(desc(SentMail.sent_at))
-        .limit(limit)
-        .all()
-    )
+def get_sent_emails(
+    limit: int = 100,
+    status: Optional[str] = None,
+    db: Session = Depends(get_db),
+):
+    query = db.query(SentMail)
+    if status == "sent":
+        query = query.filter(SentMail.status.in_(["sent", "replied", "replies"]))
+    elif status == "blocked":
+        query = query.filter(SentMail.status.ilike("%blocked%"))
+    elif status == "bounced":
+        query = query.filter(SentMail.status == "bounced")
+    elif status:
+        query = query.filter(SentMail.status == status)
+
+    items = query.order_by(desc(SentMail.sent_at)).limit(limit).all()
     return [
         {
             "id": str(item.id),
@@ -911,6 +932,56 @@ def get_sent_emails(limit: int = 100, db: Session = Depends(get_db)):
             "status": item.status,
             "delivery_mode": item.delivery_mode,
             "sent_at": item.sent_at.strftime("%Y-%m-%d %H:%M:%S") if item.sent_at else "",
+        }
+        for item in items
+    ]
+
+
+@router.get("/data/bounced")
+def get_bounced_emails(limit: int = 100, db: Session = Depends(get_db)):
+    items = (
+        db.query(UndeliveredMail)
+        .filter(
+            ~UndeliveredMail.error_code.ilike("%blocked%"),
+            ~UndeliveredMail.bounce_reason.ilike("%blocked%"),
+        )
+        .order_by(desc(UndeliveredMail.detected_at))
+        .limit(limit)
+        .all()
+    )
+    return [
+        {
+            "id": str(item.id),
+            "to_email": item.to_email,
+            "bounce_reason": item.bounce_reason,
+            "error_code": item.error_code,
+            "is_suppressed": item.is_suppressed,
+            "detected_at": item.detected_at.strftime("%Y-%m-%d %H:%M:%S") if item.detected_at else "",
+        }
+        for item in items
+    ]
+
+
+@router.get("/data/blocked")
+def get_blocked_emails(limit: int = 100, db: Session = Depends(get_db)):
+    items = (
+        db.query(UndeliveredMail)
+        .filter(
+            (UndeliveredMail.error_code.ilike("%blocked%")) |
+            (UndeliveredMail.bounce_reason.ilike("%blocked%")),
+        )
+        .order_by(desc(UndeliveredMail.detected_at))
+        .limit(limit)
+        .all()
+    )
+    return [
+        {
+            "id": str(item.id),
+            "to_email": item.to_email,
+            "bounce_reason": item.bounce_reason,
+            "error_code": item.error_code,
+            "is_suppressed": item.is_suppressed,
+            "detected_at": item.detected_at.strftime("%Y-%m-%d %H:%M:%S") if item.detected_at else "",
         }
         for item in items
     ]

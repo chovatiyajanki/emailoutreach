@@ -127,6 +127,8 @@ export default function App() {
   const [accounts, setAccounts] = useState([])
   const [sentMails, setSentMails] = useState([])
   const [undeliveredMails, setUndeliveredMails] = useState([])
+  const [bouncedMails, setBouncedMails] = useState([])
+  const [blockedMails, setBlockedMails] = useState([])
   const [replies, setReplies] = useState([])
   const [runs, setRuns] = useState([])
 
@@ -134,10 +136,12 @@ export default function App() {
   // Fetch status and all data from FastAPI
   const fetchAllData = async () => {
     try {
-      const [resStatus, resAccounts, resSent, resUndelivered, resReplies, resRuns, resCampaigns] = await Promise.all([
+      const [resStatus, resAccounts, resSent, resBounced, resBlocked, resUndelivered, resReplies, resRuns, resCampaigns] = await Promise.all([
         fetch('http://localhost:8000/api/scheduler/status'),
         fetch('http://localhost:8000/api/data/accounts'),
         fetch('http://localhost:8000/api/data/sent'),
+        fetch('http://localhost:8000/api/data/bounced'),
+        fetch('http://localhost:8000/api/data/blocked'),
         fetch('http://localhost:8000/api/data/undelivered'),
         fetch('http://localhost:8000/api/data/replies'),
         fetch('http://localhost:8000/api/scheduler/runs'),
@@ -162,6 +166,8 @@ export default function App() {
       }
       if (resAccounts.ok) setAccounts(await resAccounts.json())
       if (resSent.ok) setSentMails(await resSent.json())
+      if (resBounced.ok) setBouncedMails(await resBounced.json())
+      if (resBlocked.ok) setBlockedMails(await resBlocked.json())
       if (resUndelivered.ok) setUndeliveredMails(await resUndelivered.json())
       if (resReplies.ok) setReplies(await resReplies.json())
       if (resRuns.ok) setRuns(await resRuns.json())
@@ -252,8 +258,8 @@ export default function App() {
       })
       if (res.ok) {
         await fetchAllData()
-        setActiveTab('accounts')
-        setFeedbackMsg(`Cycle complete for "${editQuery || 'All Companies'}". Discovered accounts updated in PostgreSQL!`)
+        handleSelectTab('accounts')
+        setFeedbackMsg(`Cycle complete for "${editQuery || 'All Companies'}". Discovered accounts updated in DataBase!`)
       } else {
         setFeedbackMsg('Cycle encountered an error.')
       }
@@ -287,7 +293,7 @@ export default function App() {
       })
       if (res.ok) {
         await fetchAllData()
-        setActiveTab('campaigns')
+        handleSelectTab('campaigns')
         setFeedbackMsg(`Campaign "${campaignName}" launched! 5-step cycle executed and metrics updated.`)
       } else {
         setFeedbackMsg('Campaign execution encountered an error.')
@@ -320,7 +326,7 @@ export default function App() {
       })
       if (res.ok) {
         await fetchAllData()
-        setActiveTab('campaigns')
+        handleSelectTab('campaigns')
         setFeedbackMsg(`Campaign "${campaignName}" saved & Scheduler started! Running every ${editInterval >= 60 ? (editInterval / 60) + ' min' : editInterval + 's'}.`)
       }
     } catch {
@@ -349,7 +355,7 @@ export default function App() {
       })
       if (res.ok) {
         await fetchAllData()
-        setActiveTab('campaigns')
+        handleSelectTab('campaigns')
         setFeedbackMsg(`Campaign "${campaignName}" saved successfully.`)
       }
     } catch {
@@ -395,7 +401,7 @@ export default function App() {
 
   // Delete campaign
   const handleDeleteCampaign = async (campaignId, cName) => {
-    if (!window.confirm(`Delete campaign "${cName}"? This will remove it from PostgreSQL.`)) {
+    if (!window.confirm(`Delete campaign "${cName}"? This will remove it from DataBase.`)) {
       return
     }
     try {
@@ -636,12 +642,59 @@ export default function App() {
     }
   }
 
+  // Switch tab and automatically reset table search filter
+  const handleSelectTab = (tab) => {
+    setActiveTab(tab)
+    setSearchQuery('')
+  }
+
   // Filter items in active table
   const filterRows = (items) => {
     if (!searchQuery.trim()) return items
     const q = searchQuery.toLowerCase()
     return items.filter((row) => JSON.stringify(row).toLowerCase().includes(q))
   }
+
+  // Render clean "no matches found" state if search filter returned 0 results
+  const renderNoSearchResults = (totalCount) => (
+    <div className="no-data-box">
+      <h4 className="no-data-title">No matches found for &quot;{searchQuery}&quot;</h4>
+      <p className="no-data-hint">
+        None of the {totalCount} records in this tab matched your search term.
+      </p>
+      <button
+        className="nav-btn"
+        style={{ marginTop: '12px', padding: '6px 14px' }}
+        onClick={() => setSearchQuery('')}
+      >
+        Clear Search Filter
+      </button>
+    </div>
+  )
+
+  // Strict Categorization per user request:
+  // 1. Sent Mails: ONLY genuinely dispatched emails (strictly exclude bounced and blocked)
+  const sentOnlyMails = sentMails.filter(
+    (m) => m.status === 'sent' || m.status === 'replied' || m.status === 'replies'
+  )
+
+  // 2. Bounced Mails: ONLY recipient mailbox failures (550 mailbox not found / invalid recipient)
+  const effectiveBouncedMails = bouncedMails.length > 0
+    ? bouncedMails
+    : undeliveredMails.filter(
+        (u) =>
+          !String(u.error_code || '').toLowerCase().includes('blocked') &&
+          !String(u.bounce_reason || '').toLowerCase().includes('blocked')
+      )
+
+  // 3. Blocked Mails: ONLY provider policy blocks (Google 554/5.7.1 outbound sending restrictions)
+  const effectiveBlockedMails = blockedMails.length > 0
+    ? blockedMails
+    : undeliveredMails.filter(
+        (u) =>
+          String(u.error_code || '').toLowerCase().includes('blocked') ||
+          String(u.bounce_reason || '').toLowerCase().includes('blocked')
+      )
 
   return (
     <div className="scheduler-app">
@@ -742,7 +795,7 @@ export default function App() {
                 <span
                   className="hero-stat-badge highlight-created"
                   title="Total outreach campaigns created in the system"
-                  onClick={() => setActiveTab('campaigns')}
+                  onClick={() => handleSelectTab('campaigns')}
                   style={{ cursor: 'pointer' }}
                 >
                   Campaigns: <strong>{status.summary?.total_campaigns_created ?? campaigns.length}</strong>
@@ -750,7 +803,7 @@ export default function App() {
                 <span
                   className="hero-stat-badge highlight-run"
                   title="Total outreach campaigns that have been executed"
-                  onClick={() => setActiveTab('campaigns')}
+                  onClick={() => handleSelectTab('campaigns')}
                   style={{ cursor: 'pointer' }}
                 >
                   Executed: <strong>{status.summary?.total_campaigns_run ?? 0}</strong>
@@ -888,7 +941,7 @@ export default function App() {
           {/* STEP 1: SCRAPE */}
           <div
             className={`pipeline-step-node ${activeTab === 'accounts' ? 'selected' : ''}`}
-            onClick={() => setActiveTab('accounts')}
+            onClick={() => handleSelectTab('accounts')}
             title="Step 1: Scrapes real company domains matching target niche"
           >
             <div className="node-icon-circle step-1">1</div>
@@ -904,7 +957,7 @@ export default function App() {
           {/* STEP 2: FIND COUNT */}
           <div
             className={`pipeline-step-node ${activeTab === 'ready' ? 'selected' : ''}`}
-            onClick={() => setActiveTab('ready')}
+            onClick={() => handleSelectTab('ready')}
             title="Step 2: Audits accounts and prepares uncontacted leads for outreach"
           >
             <div className="node-icon-circle step-2">2</div>
@@ -920,46 +973,31 @@ export default function App() {
           {/* STEP 3: SEND MAILS */}
           <div
             className={`pipeline-step-node ${activeTab === 'sent' ? 'selected' : ''}`}
-            onClick={() => setActiveTab('sent')}
+            onClick={() => handleSelectTab('sent')}
             title="Step 3: Dispatches emails via Hostinger/SMTP and syncs to Sent folder"
           >
             <div className="node-icon-circle step-3">3</div>
             <div className="node-content">
               <span className="node-step-tag">Step 3</span>
               <span className="node-title">Send Mails</span>
-              <span className="node-count">{status.summary.step_3_sent_emails} sent live</span>
+              <span className="node-count">{status.summary?.step_3_sent_emails ?? sentOnlyMails.length} sent live</span>
             </div>
           </div>
 
           <span className="pipeline-flow-arrow">&rarr;</span>
 
-          {/* STEP 4: UNDELIVERED */}
+
+          {/* STEP 4: REPLIES */}
           <div
-            className={`pipeline-step-node ${activeTab === 'undelivered' ? 'selected' : ''}`}
-            onClick={() => setActiveTab('undelivered')}
-            title="Step 4: Detects bounces and suppresses invalid mailboxes"
+            className={`pipeline-step-node ${activeTab === 'replies' ? 'selected' : ''}`}
+            onClick={() => handleSelectTab('replies')}
+            title="Step 4: Scans inbox for prospect replies and updates status"
           >
             <div className="node-icon-circle step-4">4</div>
             <div className="node-content">
               <span className="node-step-tag">Step 4</span>
-              <span className="node-title">Undelivered</span>
-              <span className="node-count">{status.summary.step_4_undelivered_emails} bounced</span>
-            </div>
-          </div>
-
-          <span className="pipeline-flow-arrow">&rarr;</span>
-
-          {/* STEP 5: REPLIES */}
-          <div
-            className={`pipeline-step-node ${activeTab === 'replies' ? 'selected' : ''}`}
-            onClick={() => setActiveTab('replies')}
-            title="Step 5: Scans inbox for prospect replies and updates status"
-          >
-            <div className="node-icon-circle step-5">5</div>
-            <div className="node-content">
-              <span className="node-step-tag">Step 5</span>
               <span className="node-title">Find Replies</span>
-              <span className="node-count">{status.summary.step_5_replies_found} replies</span>
+              <span className="node-count">{status.summary.step_4_replies_found} replies</span>
             </div>
           </div>
         </section>
@@ -972,7 +1010,7 @@ export default function App() {
             <div className="tabs-group">
               <button
                 className={`tab-pill-btn ${activeTab === 'campaigns' ? 'active' : ''}`}
-                onClick={() => setActiveTab('campaigns')}
+                onClick={() => handleSelectTab('campaigns')}
               >
                 <span>Campaigns</span>
                 <span className="tab-badge">{campaigns.length}</span>
@@ -980,7 +1018,7 @@ export default function App() {
 
               <button
                 className={`tab-pill-btn ${activeTab === 'accounts' ? 'active' : ''}`}
-                onClick={() => setActiveTab('accounts')}
+                onClick={() => handleSelectTab('accounts')}
               >
                 <span>Scraped Accounts</span>
                 <span className="tab-badge">{accounts.length}</span>
@@ -988,7 +1026,7 @@ export default function App() {
 
               <button
                 className={`tab-pill-btn ${activeTab === 'ready' ? 'active' : ''}`}
-                onClick={() => setActiveTab('ready')}
+                onClick={() => handleSelectTab('ready')}
               >
                 <span>Ready for Outreach</span>
                 <span className="tab-badge" style={{ background: '#0284c7', color: '#fff' }}>
@@ -998,23 +1036,37 @@ export default function App() {
 
               <button
                 className={`tab-pill-btn ${activeTab === 'sent' ? 'active' : ''}`}
-                onClick={() => setActiveTab('sent')}
+                onClick={() => handleSelectTab('sent')}
               >
                 <span>Sent Mails</span>
-                <span className="tab-badge">{sentMails.length}</span>
+                <span className="tab-badge" style={{ background: '#059669', color: '#fff' }}>
+                  {sentOnlyMails.length}
+                </span>
               </button>
 
               <button
-                className={`tab-pill-btn ${activeTab === 'undelivered' ? 'active' : ''}`}
-                onClick={() => setActiveTab('undelivered')}
+                className={`tab-pill-btn ${activeTab === 'bounced' || activeTab === 'undelivered' ? 'active' : ''}`}
+                onClick={() => handleSelectTab('bounced')}
               >
-                <span>Undelivered</span>
-                <span className="tab-badge">{undeliveredMails.length}</span>
+                <span>Bounced Mails</span>
+                <span className="tab-badge" style={{ background: '#d97706', color: '#fff' }}>
+                  {effectiveBouncedMails.length}
+                </span>
+              </button>
+
+              <button
+                className={`tab-pill-btn ${activeTab === 'blocked' ? 'active' : ''}`}
+                onClick={() => handleSelectTab('blocked')}
+              >
+                <span>Blocked Mails</span>
+                <span className="tab-badge" style={{ background: '#dc2626', color: '#fff' }}>
+                  {effectiveBlockedMails.length}
+                </span>
               </button>
 
               <button
                 className={`tab-pill-btn ${activeTab === 'replies' ? 'active' : ''}`}
-                onClick={() => setActiveTab('replies')}
+                onClick={() => handleSelectTab('replies')}
               >
                 <span>Received Replies</span>
                 <span className="tab-badge">{replies.length}</span>
@@ -1022,7 +1074,7 @@ export default function App() {
 
               <button
                 className={`tab-pill-btn ${activeTab === 'runs' ? 'active' : ''}`}
-                onClick={() => setActiveTab('runs')}
+                onClick={() => handleSelectTab('runs')}
               >
                 <span>Run Logs</span>
                 <span className="tab-badge">{runs.length}</span>
@@ -1060,7 +1112,7 @@ export default function App() {
                   <div className="campaign-stat-box created-stat">
                     <span className="stat-label"> Total Campaigns Created</span>
                     <span className="stat-value">{status.summary?.total_campaigns_created ?? campaigns.length}</span>
-                    <span className="stat-desc">Distinct campaigns in PostgreSQL</span>
+                    <span className="stat-desc">Distinct campaigns in DataBase</span>
                   </div>
 
                   <div className="campaign-stat-box run-stat">
@@ -1072,7 +1124,7 @@ export default function App() {
                   <div className="campaign-stat-box">
                     <span className="stat-label"> Total Cycles Completed</span>
                     <span className="stat-value">{status.total_runs || campaigns.reduce((acc, c) => acc + (c.total_runs || 0), 0)}</span>
-                    <span className="stat-desc">5-step background automation cycles</span>
+                    <span className="stat-desc"> background automation cycles</span>
                   </div>
 
                   <div className="campaign-stat-box">
@@ -1082,7 +1134,7 @@ export default function App() {
                   </div>
                 </div>
 
-                {filterRows(campaigns).length === 0 ? (
+                {campaigns.length === 0 ? (
                   <div className="no-data-box">
                     <div className="no-data-icon"></div>
                     <h4 className="no-data-title">No Campaigns Created Yet</h4>
@@ -1097,6 +1149,8 @@ export default function App() {
                        Create First Campaign
                     </button>
                   </div>
+                ) : filterRows(campaigns).length === 0 ? (
+                  renderNoSearchResults(campaigns.length)
                 ) : (
                   <table className="outreach-table campaigns-table">
                     <thead>
@@ -1187,7 +1241,7 @@ export default function App() {
             )}
             {/* TAB 1: ACCOUNTS */}
             {activeTab === 'accounts' && (
-              filterRows(accounts).length === 0 ? (
+              accounts.length === 0 ? (
                 <div className="no-data-box">
                   <div className="no-data-icon"></div>
                   <h4 className="no-data-title">No Scraped Accounts Yet</h4>
@@ -1204,6 +1258,8 @@ export default function App() {
                     </button>
                   </div>
                 </div>
+              ) : filterRows(accounts).length === 0 ? (
+                renderNoSearchResults(accounts.length)
               ) : (
                 <div>
                   <div className="accounts-table-toolbar">
@@ -1213,16 +1269,22 @@ export default function App() {
                       <span>Ready for Outreach: <strong style={{ color: '#38bdf8' }}>{accounts.filter(a => a.status === 'email_found').length}</strong></span>
                       <span>•</span>
                       <span>Contacted: <strong style={{ color: '#34d399' }}>{accounts.filter(a => a.status === 'sent' || a.status === 'replied' || a.status === 'replies').length}</strong></span>
-                      {accounts.some(a => a.status === 'replies' || a.status === 'replied') && (
+                      {accounts.some(a => a.status === 'bounced') && (
                         <>
                           <span>•</span>
-                          <span>Replies: <strong style={{ color: '#fbbf24' }}>{accounts.filter(a => a.status === 'replies' || a.status === 'replied').length}</strong></span>
+                          <span>Bounced: <strong style={{ color: '#fbbf24' }}>{accounts.filter(a => a.status === 'bounced').length}</strong></span>
                         </>
                       )}
                       {accounts.some(a => a.status === 'blocked_message' || a.status === 'blocked message') && (
                         <>
                           <span>•</span>
                           <span>Blocked: <strong style={{ color: '#f87171' }}>{accounts.filter(a => a.status === 'blocked_message' || a.status === 'blocked message').length}</strong></span>
+                        </>
+                      )}
+                      {accounts.some(a => a.status === 'replies' || a.status === 'replied') && (
+                        <>
+                          <span>•</span>
+                          <span>Replies: <strong style={{ color: '#a78bfa' }}>{accounts.filter(a => a.status === 'replies' || a.status === 'replied').length}</strong></span>
                         </>
                       )}
                     </div>
@@ -1298,11 +1360,11 @@ export default function App() {
             {activeTab === 'ready' && (() => {
               const readyList = accounts.filter(a => a.status === 'email_found')
               const filteredReady = filterRows(readyList)
-              return filteredReady.length === 0 ? (
+              return readyList.length === 0 ? (
                 <div className="no-data-box">
                   <h4 className="no-data-title">No Accounts in Outreach Queue</h4>
                   <p className="no-data-hint">
-                    {readyList.length === 0 && accounts.length > 0
+                    {accounts.length > 0
                       ? 'All scraped accounts have already been emailed! Click "Run Cycle Now" or enter a new search query to scrape fresh leads.'
                       : 'No mail accounts discovered yet. Click "Run Cycle Now" or enter a search query above to scrape leads.'}
                   </p>
@@ -1316,6 +1378,8 @@ export default function App() {
                     </button>
                   </div>
                 </div>
+              ) : filteredReady.length === 0 ? (
+                renderNoSearchResults(readyList.length)
               ) : (
                 <div>
                   <div className="accounts-table-toolbar" style={{ borderLeft: '3px solid #38bdf8' }}>
@@ -1393,9 +1457,9 @@ export default function App() {
               )
             })()}
 
-            {/* TAB 2: SENT MAILS */}
+            {/* TAB 2: SENT MAILS (ONLY SENT MAILS) */}
             {activeTab === 'sent' && (
-              filterRows(sentMails).length === 0 ? (
+              sentOnlyMails.length === 0 ? (
                 <div className="no-data-box">
                   <div className="no-data-icon"></div>
                   <h4 className="no-data-title">No Sent Emails Yet</h4>
@@ -1403,85 +1467,175 @@ export default function App() {
                     When the scheduler runs Step 3, it dispatches personalized emails to discovered accounts live via Gmail SMTP.
                   </p>
                 </div>
+              ) : filterRows(sentOnlyMails).length === 0 ? (
+                renderNoSearchResults(sentOnlyMails.length)
               ) : (
-                <table className="outreach-table">
-                  <thead>
-                    <tr>
-                      <th className="th-num">#</th>
-                      <th>Recipient</th>
-                      <th>Subject</th>
-                      <th>Preview</th>
-                      <th>Mode</th>
-                      <th>Status</th>
-                      <th>Sent Time</th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {filterRows(sentMails).map((m, idx) => (
-                      <tr key={m.id} onClick={() => setSelectedRecord({ type: 'sent', data: m })}>
-                        <td className="td-num">{idx + 1}</td>
-                        <td style={{ fontWeight: 600, color: '#34d399' }}>{m.to_email}</td>
-                        <td>{m.subject}</td>
-                        <td style={{ color: '#94a3b8', maxWidth: '320px', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
-                          {m.body_snippet}
-                        </td>
-                        <td>{m.delivery_mode}</td>
-                        <td>
-                          <span className={`status-chip ${String(m.status).replace(/\s+/g, '_')}`}>
-                            {m.status === 'blocked_message' || m.status === 'blocked message' ? 'blocked message' : (m.status === 'replied' ? 'replies' : m.status)}
-                          </span>
-                        </td>
-                        <td style={{ color: '#94a3b8' }}>{m.sent_at}</td>
+                <div>
+                  <div className="accounts-table-toolbar" style={{ borderLeft: '3px solid #10b981' }}>
+                    <div className="accounts-toolbar-info">
+                      <span style={{ color: '#34d399', fontWeight: 600 }}>Sent Mails (Successfully Dispatched)</span>
+                      <span>•</span>
+                      <span>Total Sent: <strong style={{ color: '#34d399' }}>{sentOnlyMails.length}</strong></span>
+                      <span>•</span>
+                      <span style={{ fontSize: '12px', color: '#94a3b8' }}>Live SMTP Dispatched &amp; Mailbox Synced</span>
+                    </div>
+                  </div>
+
+                  <table className="outreach-table">
+                    <thead>
+                      <tr>
+                        <th className="th-num">#</th>
+                        <th>Recipient</th>
+                        <th>Subject</th>
+                        <th>Preview</th>
+                        <th>Mode</th>
+                        <th>Delivery Status</th>
+                        <th>Sent Time</th>
                       </tr>
-                    ))}
-                  </tbody>
-                </table>
+                    </thead>
+                    <tbody>
+                      {filterRows(sentOnlyMails).map((m, idx) => (
+                        <tr key={m.id} onClick={() => setSelectedRecord({ type: 'sent', data: m })}>
+                          <td className="td-num">{idx + 1}</td>
+                          <td style={{ fontWeight: 600, color: '#34d399' }}>{m.to_email}</td>
+                          <td>{m.subject}</td>
+                          <td style={{ color: '#94a3b8', maxWidth: '320px', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
+                            {m.body_snippet}
+                          </td>
+                          <td>{m.delivery_mode}</td>
+                          <td>
+                            <span className="status-chip sent">
+                              {m.status === 'replied' || m.status === 'replies' ? 'Replied' : 'Sent'}
+                            </span>
+                          </td>
+                          <td style={{ color: '#94a3b8' }}>{m.sent_at}</td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
               )
             )}
 
-            {/* TAB 3: UNDELIVERED MAILS */}
-            {activeTab === 'undelivered' && (
-              filterRows(undeliveredMails).length === 0 ? (
+            {/* TAB 3: BOUNCED MAILS (ONLY BOUNCED RECIPIENTS) */}
+            {(activeTab === 'bounced' || activeTab === 'undelivered') && (
+              effectiveBouncedMails.length === 0 ? (
                 <div className="no-data-box">
                   <div className="no-data-icon"></div>
-                  <h4 className="no-data-title">No Undelivered Mails Detected</h4>
+                  <h4 className="no-data-title">No Bounced Mails Detected</h4>
                   <p className="no-data-hint">
-                    Step 4 monitors delivery failures and automatically suppresses invalid recipient mailboxes.
+                    Step 4 monitors recipient mailbox delivery failures (such as invalid or non-existent addresses) and automatically suppresses them.
                   </p>
                 </div>
+              ) : filterRows(effectiveBouncedMails).length === 0 ? (
+                renderNoSearchResults(effectiveBouncedMails.length)
               ) : (
-                <table className="outreach-table">
-                  <thead>
-                    <tr>
-                      <th className="th-num">#</th>
-                      <th>Recipient</th>
-                      <th>Bounce Diagnostic</th>
-                      <th>Error Code</th>
-                      <th>Suppression Status</th>
-                      <th>Detected Time</th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {filterRows(undeliveredMails).map((u, idx) => (
-                      <tr key={u.id} onClick={() => setSelectedRecord({ type: 'undelivered', data: u })}>
-                        <td className="td-num">{idx + 1}</td>
-                        <td style={{ fontWeight: 600, color: '#f87171' }}>{u.to_email}</td>
-                        <td style={{ color: '#fca5a5' }}>{u.bounce_reason}</td>
-                        <td>{u.error_code}</td>
-                        <td>
-                          <span className="status-chip bounced">Permanently Suppressed</span>
-                        </td>
-                        <td style={{ color: '#94a3b8' }}>{u.detected_at}</td>
+                <div>
+                  <div className="accounts-table-toolbar" style={{ borderLeft: '3px solid #f59e0b' }}>
+                    <div className="accounts-toolbar-info">
+                      <span style={{ color: '#fbbf24', fontWeight: 600 }}>Bounced Mails (Invalid Recipient Mailboxes)</span>
+                      <span>•</span>
+                      <span>Total Bounced: <strong style={{ color: '#fbbf24' }}>{effectiveBouncedMails.length}</strong></span>
+                      <span>•</span>
+                      <span style={{ fontSize: '12px', color: '#94a3b8' }}>550 Recipient Not Found • Automatically Suppressed</span>
+                    </div>
+                  </div>
+
+                  <table className="outreach-table">
+                    <thead>
+                      <tr>
+                        <th className="th-num">#</th>
+                        <th>Recipient</th>
+                        <th>Bounce Diagnostic</th>
+                        <th>Error Code</th>
+                        <th>Suppression Status</th>
+                        <th>Detected Time</th>
                       </tr>
-                    ))}
-                  </tbody>
-                </table>
+                    </thead>
+                    <tbody>
+                      {filterRows(effectiveBouncedMails).map((u, idx) => (
+                        <tr key={u.id} onClick={() => setSelectedRecord({ type: 'bounced', data: u })}>
+                          <td className="td-num">{idx + 1}</td>
+                          <td style={{ fontWeight: 600, color: '#fbbf24' }}>{u.to_email}</td>
+                          <td style={{ color: '#fde68a' }}>{u.bounce_reason}</td>
+                          <td>
+                            <span style={{ background: 'rgba(245, 158, 11, 0.15)', color: '#fbbf24', padding: '2px 8px', borderRadius: '4px', fontSize: '12px', fontWeight: 600 }}>
+                              {u.error_code || '550'}
+                            </span>
+                          </td>
+                          <td>
+                            <span className="status-chip bounced">Permanently Suppressed</span>
+                          </td>
+                          <td style={{ color: '#94a3b8' }}>{u.detected_at}</td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              )
+            )}
+
+            {/* TAB 4: BLOCKED MAILS (ONLY BLOCKED MAILS) */}
+            {activeTab === 'blocked' && (
+              effectiveBlockedMails.length === 0 ? (
+                <div className="no-data-box">
+                  <div className="no-data-icon"></div>
+                  <h4 className="no-data-title">No Blocked Mails Detected</h4>
+                  <p className="no-data-hint">
+                    Provider policy blocks (such as Google 554/5.7.1 outbound sending restrictions) are captured and isolated here to protect sender domain reputation.
+                  </p>
+                </div>
+              ) : filterRows(effectiveBlockedMails).length === 0 ? (
+                renderNoSearchResults(effectiveBlockedMails.length)
+              ) : (
+                <div>
+                  <div className="accounts-table-toolbar" style={{ borderLeft: '3px solid #ef4444' }}>
+                    <div className="accounts-toolbar-info">
+                      <span style={{ color: '#f87171', fontWeight: 600 }}>Blocked Mails (Provider Policy Restrictions)</span>
+                      <span>•</span>
+                      <span>Total Blocked: <strong style={{ color: '#f87171' }}>{effectiveBlockedMails.length}</strong></span>
+                      <span>•</span>
+                      <span style={{ fontSize: '12px', color: '#94a3b8' }}>554 / 5.7.1 Outbound Sending Restriction • Domain Quarantined</span>
+                    </div>
+                  </div>
+
+                  <table className="outreach-table">
+                    <thead>
+                      <tr>
+                        <th className="th-num">#</th>
+                        <th>Recipient</th>
+                        <th>Policy Block Diagnostic</th>
+                        <th>Error Code</th>
+                        <th>Protection Status</th>
+                        <th>Detected Time</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {filterRows(effectiveBlockedMails).map((b, idx) => (
+                        <tr key={b.id} onClick={() => setSelectedRecord({ type: 'blocked', data: b })}>
+                          <td className="td-num">{idx + 1}</td>
+                          <td style={{ fontWeight: 600, color: '#f87171' }}>{b.to_email}</td>
+                          <td style={{ color: '#fca5a5' }}>{b.bounce_reason}</td>
+                          <td>
+                            <span style={{ background: 'rgba(239, 68, 68, 0.15)', color: '#f87171', padding: '2px 8px', borderRadius: '4px', fontSize: '12px', fontWeight: 600 }}>
+                              {b.error_code || '550 (Blocked)'}
+                            </span>
+                          </td>
+                          <td>
+                            <span className="status-chip blocked_message">Policy Blocked</span>
+                          </td>
+                          <td style={{ color: '#94a3b8' }}>{b.detected_at}</td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
               )
             )}
 
             {/* TAB 4: REPLIES */}
             {activeTab === 'replies' && (
-              filterRows(replies).length === 0 ? (
+              replies.length === 0 ? (
                 <div className="no-data-box">
                   <div className="no-data-icon"></div>
                   <h4 className="no-data-title">No Inbound Replies Yet</h4>
@@ -1489,6 +1643,8 @@ export default function App() {
                     scans for lead responses and classifies intent (Interested, Meeting Requested, etc.).
                   </p>
                 </div>
+              ) : filterRows(replies).length === 0 ? (
+                renderNoSearchResults(replies.length)
               ) : (
                 <table className="outreach-table">
                   <thead>
@@ -1523,7 +1679,7 @@ export default function App() {
 
             {/* TAB 5: RUN HISTORY & LOGS */}
             {activeTab === 'runs' && (
-              filterRows(runs).length === 0 ? (
+              runs.length === 0 ? (
                 <div className="no-data-box">
                   <div className="no-data-icon"></div>
                   <h4 className="no-data-title">No Scheduler Cycles Executed Yet</h4>
@@ -1531,6 +1687,8 @@ export default function App() {
                     Click <strong>" Run Cycle Now"</strong> to execute Cycle #1.
                   </p>
                 </div>
+              ) : filterRows(runs).length === 0 ? (
+                renderNoSearchResults(runs.length)
               ) : (
                 <div>
                   <table className="outreach-table">
@@ -1597,7 +1755,9 @@ export default function App() {
               <h3>
                 {selectedRecord.type === 'account' && 'Company Mail Account'}
                 {selectedRecord.type === 'sent' && 'Sent Outreach Email'}
-                {selectedRecord.type === 'undelivered' && 'Undelivered Bounce Notice'}
+                {selectedRecord.type === 'bounced' && 'Bounced Mail Diagnostic'}
+                {selectedRecord.type === 'blocked' && 'Blocked Mail Policy Diagnostic'}
+                {selectedRecord.type === 'undelivered' && 'Undelivered Notice'}
                 {selectedRecord.type === 'reply' && 'Lead Reply Message'}
                 {selectedRecord.type === 'run' && `Scheduler Cycle #${selectedRecord.data.run_number}`}
               </h3>
@@ -1660,8 +1820,12 @@ export default function App() {
 
               {selectedRecord.data.bounce_reason && (
                 <div className="detail-line">
-                  <span className="detail-label">Bounce Diagnostic</span>
-                  <span className="detail-value" style={{ color: '#f87171' }}>{selectedRecord.data.bounce_reason}</span>
+                  <span className="detail-label">
+                    {selectedRecord.type === 'blocked' ? 'Policy Block Diagnostic' : 'Bounce Diagnostic'}
+                  </span>
+                  <span className="detail-value" style={{ color: selectedRecord.type === 'blocked' ? '#f87171' : '#fbbf24' }}>
+                    {selectedRecord.data.bounce_reason}
+                  </span>
                 </div>
               )}
 
@@ -1778,7 +1942,7 @@ export default function App() {
                         onClick={() => {
                           setEditQuery(preset.query)
                           setCampaignName(preset.name)
-                        }}
+                        }}Database
                       >
                         {preset.label}
                       </button>
@@ -2442,7 +2606,7 @@ export default function App() {
                   className="btn-campaign-launch"
                   onClick={handleSaveSmtp}
                   disabled={smtpSaving || !smtpHost || !smtpUsername || !smtpPassword}
-                  title="Save manual SMTP credentials to PostgreSQL"
+                  title="Save manual SMTP credentials to DataBase for future campaigns"
                 >
                   {smtpSaving ? 'Saving...' : ' Save SMTP Settings'}
                 </button>

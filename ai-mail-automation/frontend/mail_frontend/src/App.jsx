@@ -30,6 +30,14 @@ const MAIL_PRESETS = [
   }
 ]
 
+const API_BASE = (
+  import.meta.env.VITE_API_URL ||
+  (typeof window !== 'undefined' &&
+  (window.location.hostname === 'localhost' || window.location.hostname === '127.0.0.1')
+    ? 'http://localhost:8000'
+    : 'https://emailoutreach-84dr.onrender.com')
+).replace(/\/$/, '')
+
 export default function App() {
   // Current active data tab: 'accounts' | 'sent' | 'undelivered' | 'replies' | 'runs'
   const [activeTab, setActiveTab] = useState('accounts')
@@ -137,15 +145,15 @@ export default function App() {
   const fetchAllData = async () => {
     try {
       const [resStatus, resAccounts, resSent, resBounced, resBlocked, resUndelivered, resReplies, resRuns, resCampaigns] = await Promise.all([
-        fetch('http://localhost:8000/api/scheduler/status'),
-        fetch('http://localhost:8000/api/data/accounts'),
-        fetch('http://localhost:8000/api/data/sent'),
-        fetch('http://localhost:8000/api/data/bounced'),
-        fetch('http://localhost:8000/api/data/blocked'),
-        fetch('http://localhost:8000/api/data/undelivered'),
-        fetch('http://localhost:8000/api/data/replies'),
-        fetch('http://localhost:8000/api/scheduler/runs'),
-        fetch('http://localhost:8000/api/campaigns'),
+        fetch(`${API_BASE}/api/scheduler/status`),
+        fetch(`${API_BASE}/api/data/accounts`),
+        fetch(`${API_BASE}/api/data/sent`),
+        fetch(`${API_BASE}/api/data/bounced`),
+        fetch(`${API_BASE}/api/data/blocked`),
+        fetch(`${API_BASE}/api/data/undelivered`),
+        fetch(`${API_BASE}/api/data/replies`),
+        fetch(`${API_BASE}/api/scheduler/runs`),
+        fetch(`${API_BASE}/api/campaigns`),
       ])
 
       if (resStatus.ok) {
@@ -183,7 +191,7 @@ export default function App() {
   // Fetch SMTP settings from backend
   const fetchSmtpSettings = async () => {
     try {
-      const res = await fetch('http://localhost:8000/api/smtp/settings')
+      const res = await fetch(`${API_BASE}/api/smtp/settings`)
       if (res.ok) {
         const data = await res.json()
         if (data.smtp_host) setSmtpHost(data.smtp_host)
@@ -209,7 +217,7 @@ export default function App() {
     try {
       if (!status.is_running) {
         // Automatically save current inputs before starting
-        await fetch('http://localhost:8000/api/scheduler/config', {
+        await fetch(`${API_BASE}/api/scheduler/config`, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({
@@ -222,13 +230,13 @@ export default function App() {
             email_body: campaignBody,
           }),
         })
-        const res = await fetch('http://localhost:8000/api/scheduler/start', { method: 'POST' })
+        const res = await fetch(`${API_BASE}/api/scheduler/start`, { method: 'POST' })
         if (res.ok) {
           await fetchAllData()
           setFeedbackMsg(`Scheduler started for "${campaignName}"! Running every ${editInterval >= 60 ? (editInterval / 60) + ' min' : editInterval + 's'}.`)
         }
       } else {
-        const res = await fetch('http://localhost:8000/api/scheduler/stop', { method: 'POST' })
+        const res = await fetch(`${API_BASE}/api/scheduler/stop`, { method: 'POST' })
         if (res.ok) {
           await fetchAllData()
           setFeedbackMsg('Scheduler stopped.')
@@ -244,7 +252,7 @@ export default function App() {
     setIsTriggering(true)
     setFeedbackMsg(`Executing cycle for "${editQuery || 'All Companies'}" (Scrape: ${editScrapeBatch}, Send: ${editSendBatch})...`)
     try {
-      const res = await fetch('http://localhost:8000/api/scheduler/trigger', {
+      const res = await fetch(`${API_BASE}/api/scheduler/trigger`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
@@ -264,7 +272,7 @@ export default function App() {
         setFeedbackMsg('Cycle encountered an error.')
       }
     } catch {
-      setFeedbackMsg('Failed to run cycle. Ensure FastAPI is active on port 8000.')
+      setFeedbackMsg('Failed to run cycle. Ensure backend is active.')
     } finally {
       setIsTriggering(false)
     }
@@ -276,7 +284,7 @@ export default function App() {
     setIsCampaignModalOpen(false)
     setFeedbackMsg(`Creating and launching campaign "${campaignName}" for "${editQuery || 'All Companies'}"...`)
     try {
-      const res = await fetch('http://localhost:8000/api/campaigns/create', {
+      const res = await fetch(`${API_BASE}/api/campaigns/create`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
@@ -309,7 +317,7 @@ export default function App() {
   const handleSaveAndStartScheduler = async () => {
     setIsCampaignModalOpen(false)
     try {
-      const res = await fetch('http://localhost:8000/api/campaigns/create', {
+      const res = await fetch(`${API_BASE}/api/campaigns/create`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
@@ -338,7 +346,7 @@ export default function App() {
   const handleSaveCampaignOnly = async () => {
     setIsCampaignModalOpen(false)
     try {
-      const res = await fetch('http://localhost:8000/api/campaigns/create', {
+      const res = await fetch(`${API_BASE}/api/campaigns/create`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
@@ -366,7 +374,7 @@ export default function App() {
   // Activate campaign in scheduler
   const handleActivateCampaign = async (campaignId, cName) => {
     try {
-      const res = await fetch(`http://localhost:8000/api/campaigns/${campaignId}/activate`, {
+      const res = await fetch(`${API_BASE}/api/campaigns/${campaignId}/activate`, {
         method: 'POST',
       })
       if (res.ok) {
@@ -383,7 +391,7 @@ export default function App() {
     setIsTriggering(true)
     setFeedbackMsg(`Executing cycle for campaign "${cName}"...`)
     try {
-      const res = await fetch(`http://localhost:8000/api/campaigns/${campaignId}/run`, {
+      const res = await fetch(`${API_BASE}/api/campaigns/${campaignId}/run`, {
         method: 'POST',
       })
       if (res.ok) {
@@ -405,7 +413,7 @@ export default function App() {
       return
     }
     try {
-      const res = await fetch(`http://localhost:8000/api/campaigns/${campaignId}`, {
+      const res = await fetch(`${API_BASE}/api/campaigns/${campaignId}`, {
         method: 'DELETE',
       })
       if (res.ok) {
@@ -459,7 +467,7 @@ export default function App() {
     setIsSavingTemplate(true)
     const cleanSubject = editorSubject.replace(/<[^>]+>/g, '').trim()
     try {
-      const res = await fetch('http://localhost:8000/api/template/save', {
+      const res = await fetch(`${API_BASE}/api/template/save`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
@@ -494,7 +502,7 @@ export default function App() {
     setIsEnhancing(true)
     setFeedbackMsg('AI is polishing and enhancing your email template...')
     try {
-      const res = await fetch('http://localhost:8000/api/template/enhance', {
+      const res = await fetch(`${API_BASE}/api/template/enhance`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
@@ -525,7 +533,7 @@ export default function App() {
       return
     }
     try {
-      const res = await fetch('http://localhost:8000/api/reset', { method: 'POST' })
+      const res = await fetch(`${API_BASE}/api/reset`, { method: 'POST' })
       if (res.ok) {
         await fetchAllData()
         setFeedbackMsg('All tables reset cleanly. Fresh start initialized.')
@@ -541,7 +549,7 @@ export default function App() {
     setSmtpTesting(true)
     setSmtpTestResult(null)
     try {
-      const res = await fetch('http://localhost:8000/api/smtp/test', {
+      const res = await fetch(`${API_BASE}/api/smtp/test`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
@@ -565,7 +573,7 @@ export default function App() {
   const handleSaveSmtp = async () => {
     setSmtpSaving(true)
     try {
-      const res = await fetch('http://localhost:8000/api/smtp/settings', {
+      const res = await fetch(`${API_BASE}/api/smtp/settings`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
@@ -598,7 +606,7 @@ export default function App() {
       return
     }
     try {
-      const res = await fetch('http://localhost:8000/api/smtp/clear', { method: 'POST' })
+      const res = await fetch(`${API_BASE}/api/smtp/clear`, { method: 'POST' })
       if (res.ok) {
         setSmtpUsername('')
         setSmtpPassword('')

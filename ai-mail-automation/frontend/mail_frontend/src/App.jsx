@@ -38,6 +38,33 @@ const API_BASE = (
     : 'https://emailoutreach-84dr.onrender.com')
 ).replace(/\/$/, '')
 
+// Helper to format any UTC or ISO timestamp into clean user local time (e.g. IST)
+function formatLocalDateTime(val, includeSeconds = false) {
+  if (!val) return '—'
+  let str = String(val).trim()
+  if (!str) return '—'
+  // If no timezone offset (+/-) and no Z, assume UTC from backend database
+  if (!str.endsWith('Z') && !/[+-]\d{2}(:?\d{2})?$/.test(str)) {
+    str = str.replace(' ', 'T') + 'Z'
+  }
+  const d = new Date(str)
+  if (isNaN(d.getTime())) return val
+
+  const pad = (n) => String(n).padStart(2, '0')
+  const yyyy = d.getFullYear()
+  const mm = pad(d.getMonth() + 1)
+  const dd = pad(d.getDate())
+  let hours = d.getHours()
+  const minutes = pad(d.getMinutes())
+  const seconds = pad(d.getSeconds())
+  const ampm = hours >= 12 ? 'PM' : 'AM'
+  const h12 = pad(hours % 12 || 12)
+
+  return includeSeconds
+    ? `${yyyy}-${mm}-${dd} ${h12}:${minutes}:${seconds} ${ampm}`
+    : `${yyyy}-${mm}-${dd} ${h12}:${minutes} ${ampm}`
+}
+
 export default function App() {
   // Current active data tab: 'accounts' | 'sent' | 'undelivered' | 'replies' | 'runs'
   const [activeTab, setActiveTab] = useState('accounts')
@@ -1199,7 +1226,7 @@ export default function App() {
                           <td style={{ fontWeight: 600, color: '#60a5fa' }}>{camp.total_emails_sent || 0}</td>
                           <td style={{ fontWeight: 600, color: '#f472b6' }}>{camp.total_replies || 0}</td>
                           <td style={{ fontSize: '12px', color: '#94a3b8' }}>
-                            {camp.last_run_at ? new Date(camp.last_run_at).toLocaleString() : 'Never'}
+                            {camp.last_run_at ? formatLocalDateTime(camp.last_run_at) : 'Never'}
                           </td>
                           <td>
                             <span className={`status-chip ${camp.total_runs > 0 ? 'sent' : 'email_found'}`}>
@@ -1334,7 +1361,7 @@ export default function App() {
                               {acc.status === 'blocked_message' || acc.status === 'blocked message' ? 'blocked message' : (acc.status === 'replied' ? 'replies' : acc.status)}
                             </span>
                           </td>
-                          <td style={{ color: '#94a3b8' }}>{acc.scraped_at}</td>
+                          <td style={{ color: '#94a3b8' }}>{formatLocalDateTime(acc.scraped_at)}</td>
                           <td style={{ textAlign: 'right' }}>
                             {acc.status === 'email_found' ? (
                               <span style={{ color: '#38bdf8', fontSize: '12px', fontWeight: 600 }}>
@@ -1512,7 +1539,7 @@ export default function App() {
                               {m.status === 'replied' || m.status === 'replies' ? 'Replied' : 'Sent'}
                             </span>
                           </td>
-                          <td style={{ color: '#94a3b8' }}>{m.sent_at}</td>
+                          <td style={{ color: '#94a3b8' }}>{formatLocalDateTime(m.sent_at, true)}</td>
                         </tr>
                       ))}
                     </tbody>
@@ -1570,7 +1597,7 @@ export default function App() {
                           <td>
                             <span className="status-chip bounced">Permanently Suppressed</span>
                           </td>
-                          <td style={{ color: '#94a3b8' }}>{u.detected_at}</td>
+                          <td style={{ color: '#94a3b8' }}>{formatLocalDateTime(u.detected_at, true)}</td>
                         </tr>
                       ))}
                     </tbody>
@@ -1628,7 +1655,7 @@ export default function App() {
                           <td>
                             <span className="status-chip blocked_message">Policy Blocked</span>
                           </td>
-                          <td style={{ color: '#94a3b8' }}>{b.detected_at}</td>
+                          <td style={{ color: '#94a3b8' }}>{formatLocalDateTime(b.detected_at, true)}</td>
                         </tr>
                       ))}
                     </tbody>
@@ -1673,7 +1700,7 @@ export default function App() {
                         <td>
                           <span className="status-chip replied">{r.sentiment}</span>
                         </td>
-                        <td style={{ color: '#94a3b8' }}>{r.received_at}</td>
+                        <td style={{ color: '#94a3b8' }}>{formatLocalDateTime(r.received_at, true)}</td>
                       </tr>
                     ))}
                   </tbody>
@@ -1717,8 +1744,8 @@ export default function App() {
                           <td className="td-num">{idx + 1}</td>
                           <td style={{ fontWeight: 700, color: '#818cf8' }}>Run #{run.run_number}</td>
                           <td style={{ fontWeight: 600, color: '#a5b4fc' }}>{run.campaign_name || 'Default Outreach Campaign'}</td>
-                          <td>{run.started_at}</td>
-                          <td>{run.completed_at || 'In progress'}</td>
+                          <td>{formatLocalDateTime(run.started_at, true)}</td>
+                          <td>{run.completed_at ? formatLocalDateTime(run.completed_at, true) : 'In progress'}</td>
                           <td>{run.scraped_count}</td>
                           <td>{run.found_count}</td>
                           <td style={{ color: '#34d399' }}>{run.sent_count}</td>
@@ -1819,6 +1846,43 @@ export default function App() {
                 <div className="detail-line">
                   <span className="detail-label">Subject</span>
                   <span className="detail-value">{selectedRecord.data.subject}</span>
+                </div>
+              )}
+
+              {selectedRecord.data.sent_at && (
+                <div className="detail-line">
+                  <span className="detail-label">Sent At (Local)</span>
+                  <span className="detail-value">{formatLocalDateTime(selectedRecord.data.sent_at, true)}</span>
+                </div>
+              )}
+              {selectedRecord.data.scraped_at && (
+                <div className="detail-line">
+                  <span className="detail-label">Scraped At (Local)</span>
+                  <span className="detail-value">{formatLocalDateTime(selectedRecord.data.scraped_at, true)}</span>
+                </div>
+              )}
+              {selectedRecord.data.detected_at && (
+                <div className="detail-line">
+                  <span className="detail-label">Detected At (Local)</span>
+                  <span className="detail-value">{formatLocalDateTime(selectedRecord.data.detected_at, true)}</span>
+                </div>
+              )}
+              {selectedRecord.data.received_at && (
+                <div className="detail-line">
+                  <span className="detail-label">Received At (Local)</span>
+                  <span className="detail-value">{formatLocalDateTime(selectedRecord.data.received_at, true)}</span>
+                </div>
+              )}
+              {selectedRecord.data.started_at && (
+                <div className="detail-line">
+                  <span className="detail-label">Started At (Local)</span>
+                  <span className="detail-value">{formatLocalDateTime(selectedRecord.data.started_at, true)}</span>
+                </div>
+              )}
+              {selectedRecord.data.completed_at && (
+                <div className="detail-line">
+                  <span className="detail-label">Completed At (Local)</span>
+                  <span className="detail-value">{formatLocalDateTime(selectedRecord.data.completed_at, true)}</span>
                 </div>
               )}
 

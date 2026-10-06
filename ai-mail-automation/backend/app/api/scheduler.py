@@ -45,6 +45,14 @@ router = APIRouter(
 )
 
 
+def format_iso(dt: Optional[datetime]) -> str:
+    if not dt:
+        return ""
+    if dt.tzinfo is None:
+        return dt.isoformat() + "Z"
+    return dt.isoformat()
+
+
 class CampaignCreateRequest(BaseModel):
     name: str
     search_query: str
@@ -856,8 +864,8 @@ def get_scheduler_runs(limit: int = 15, db: Session = Depends(get_db)):
             "run_number": r.run_number,
             "campaign_id": str(r.campaign_id) if r.campaign_id else None,
             "campaign_name": r.campaign_name or "Default Outreach Campaign",
-            "started_at": r.started_at.strftime("%Y-%m-%d %H:%M:%S") if r.started_at else "",
-            "completed_at": r.completed_at.strftime("%Y-%m-%d %H:%M:%S") if r.completed_at else "",
+            "started_at": format_iso(r.started_at),
+            "completed_at": format_iso(r.completed_at),
             "status": r.status,
             "query_used": r.query_used,
             "scraped_count": r.scraped_count,
@@ -889,7 +897,7 @@ def get_company_accounts(limit: int = 100, db: Session = Depends(get_db)):
             "city": item.city,
             "verification_score": item.verification_score,
             "status": item.status,
-            "scraped_at": item.scraped_at.strftime("%Y-%m-%d %H:%M") if item.scraped_at else "",
+            "scraped_at": format_iso(item.scraped_at),
         }
         for item in items
     ]
@@ -921,7 +929,7 @@ def get_sent_emails(
             "body_snippet": item.body_snippet,
             "status": item.status,
             "delivery_mode": item.delivery_mode,
-            "sent_at": item.sent_at.strftime("%Y-%m-%d %H:%M:%S") if item.sent_at else "",
+            "sent_at": format_iso(item.sent_at),
         }
         for item in items
     ]
@@ -946,7 +954,7 @@ def get_bounced_emails(limit: int = 100, db: Session = Depends(get_db)):
             "bounce_reason": item.bounce_reason,
             "error_code": item.error_code,
             "is_suppressed": item.is_suppressed,
-            "detected_at": item.detected_at.strftime("%Y-%m-%d %H:%M:%S") if item.detected_at else "",
+            "detected_at": format_iso(item.detected_at),
         }
         for item in items
     ]
@@ -971,7 +979,7 @@ def get_blocked_emails(limit: int = 100, db: Session = Depends(get_db)):
             "bounce_reason": item.bounce_reason,
             "error_code": item.error_code,
             "is_suppressed": item.is_suppressed,
-            "detected_at": item.detected_at.strftime("%Y-%m-%d %H:%M:%S") if item.detected_at else "",
+            "detected_at": format_iso(item.detected_at),
         }
         for item in items
     ]
@@ -992,7 +1000,7 @@ def get_undelivered_mails(limit: int = 100, db: Session = Depends(get_db)):
             "bounce_reason": item.bounce_reason,
             "error_code": item.error_code,
             "is_suppressed": item.is_suppressed,
-            "detected_at": item.detected_at.strftime("%Y-%m-%d %H:%M:%S") if item.detected_at else "",
+            "detected_at": format_iso(item.detected_at),
         }
         for item in items
     ]
@@ -1015,7 +1023,7 @@ def get_mail_replies(limit: int = 100, db: Session = Depends(get_db)):
             "body": item.body,
             "sentiment": item.sentiment,
             "ai_summary": item.ai_summary,
-            "received_at": item.received_at.strftime("%Y-%m-%d %H:%M:%S") if item.received_at else "",
+            "received_at": format_iso(item.received_at),
         }
         for item in items
     ]

@@ -3,7 +3,7 @@ import smtplib
 import json
 import urllib.request
 import re
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from typing import Optional
 
 from fastapi import APIRouter, Depends, HTTPException
@@ -45,12 +45,18 @@ router = APIRouter(
 )
 
 
-def format_iso(dt: Optional[datetime]) -> str:
+IST = timezone(timedelta(hours=5, minutes=30))
+
+
+def format_local_time(dt: Optional[datetime], include_seconds: bool = False) -> str:
     if not dt:
         return ""
     if dt.tzinfo is None:
-        return dt.isoformat() + "Z"
-    return dt.isoformat()
+        dt = dt.replace(tzinfo=timezone.utc)
+    dt_local = dt.astimezone(IST)
+    if include_seconds:
+        return dt_local.strftime("%Y-%m-%d %I:%M:%S %p")
+    return dt_local.strftime("%Y-%m-%d %I:%M %p")
 
 
 class CampaignCreateRequest(BaseModel):
@@ -864,8 +870,8 @@ def get_scheduler_runs(limit: int = 15, db: Session = Depends(get_db)):
             "run_number": r.run_number,
             "campaign_id": str(r.campaign_id) if r.campaign_id else None,
             "campaign_name": r.campaign_name or "Default Outreach Campaign",
-            "started_at": format_iso(r.started_at),
-            "completed_at": format_iso(r.completed_at),
+            "started_at": format_local_time(r.started_at, include_seconds=True),
+            "completed_at": format_local_time(r.completed_at, include_seconds=True),
             "status": r.status,
             "query_used": r.query_used,
             "scraped_count": r.scraped_count,
@@ -897,7 +903,7 @@ def get_company_accounts(limit: int = 100, db: Session = Depends(get_db)):
             "city": item.city,
             "verification_score": item.verification_score,
             "status": item.status,
-            "scraped_at": format_iso(item.scraped_at),
+            "scraped_at": format_local_time(item.scraped_at),
         }
         for item in items
     ]
@@ -929,7 +935,7 @@ def get_sent_emails(
             "body_snippet": item.body_snippet,
             "status": item.status,
             "delivery_mode": item.delivery_mode,
-            "sent_at": format_iso(item.sent_at),
+            "sent_at": format_local_time(item.sent_at, include_seconds=True),
         }
         for item in items
     ]
@@ -954,7 +960,7 @@ def get_bounced_emails(limit: int = 100, db: Session = Depends(get_db)):
             "bounce_reason": item.bounce_reason,
             "error_code": item.error_code,
             "is_suppressed": item.is_suppressed,
-            "detected_at": format_iso(item.detected_at),
+            "detected_at": format_local_time(item.detected_at, include_seconds=True),
         }
         for item in items
     ]
@@ -979,7 +985,7 @@ def get_blocked_emails(limit: int = 100, db: Session = Depends(get_db)):
             "bounce_reason": item.bounce_reason,
             "error_code": item.error_code,
             "is_suppressed": item.is_suppressed,
-            "detected_at": format_iso(item.detected_at),
+            "detected_at": format_local_time(item.detected_at, include_seconds=True),
         }
         for item in items
     ]
@@ -1000,7 +1006,7 @@ def get_undelivered_mails(limit: int = 100, db: Session = Depends(get_db)):
             "bounce_reason": item.bounce_reason,
             "error_code": item.error_code,
             "is_suppressed": item.is_suppressed,
-            "detected_at": format_iso(item.detected_at),
+            "detected_at": format_local_time(item.detected_at, include_seconds=True),
         }
         for item in items
     ]
@@ -1023,7 +1029,7 @@ def get_mail_replies(limit: int = 100, db: Session = Depends(get_db)):
             "body": item.body,
             "sentiment": item.sentiment,
             "ai_summary": item.ai_summary,
-            "received_at": format_iso(item.received_at),
+            "received_at": format_local_time(item.received_at, include_seconds=True),
         }
         for item in items
     ]

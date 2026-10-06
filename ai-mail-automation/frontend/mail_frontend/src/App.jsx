@@ -43,6 +43,7 @@ function formatLocalDateTime(val, includeSeconds = false) {
   if (!val) return '—'
   let str = String(val).trim()
   if (!str) return '—'
+  if (/\b(AM|PM)\b/i.test(str)) return str
   // If no timezone offset (+/-) and no Z, assume UTC from backend database
   if (!str.endsWith('Z') && !/[+-]\d{2}(:?\d{2})?$/.test(str)) {
     str = str.replace(' ', 'T') + 'Z'

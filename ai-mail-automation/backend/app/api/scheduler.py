@@ -83,6 +83,12 @@ class CampaignUpdateRequest(BaseModel):
     status: Optional[str] = None
 
 
+class CampaignTestSendRequest(BaseModel):
+    recipient_emails: str
+    subject: Optional[str] = None
+    body: Optional[str] = None
+
+
 class ConfigUpdateRequest(BaseModel):
     interval_seconds: Optional[int] = None
     search_query: Optional[str] = None
@@ -1301,6 +1307,116 @@ def create_campaign(payload: CampaignCreateRequest, db: Session = Depends(get_db
             "total_runs": campaign.total_runs,
         },
         "cycle_result": cycle_result
+    }
+
+
+@router.post("/campaigns/test-send")
+def send_test_campaign_emails(payload: CampaignTestSendRequest, db: Session = Depends(get_db)):
+    """
+    Sends live test emails to multiple comma-separated email accounts at once via configured SMTP.
+    """
+    raw_emails = payload.recipient_emails or ""
+    recipients = [
+        email.strip() for email in re.split(r"[,;\s\n\r]+", raw_emails)
+        if email.strip() and "@" in email and "." in email
+    ]
+
+    # Deduplicate while preserving order
+    seen = set()
+    deduped_recipients = []
+    for r in recipients:
+        r_lower = r.lower()
+        if r_lower not in seen:
+            seen.add(r_lower)
+            deduped_recipients.append(r)
+
+    if not deduped_recipients:
+        return {
+            "success": False,
+            "message": "Please enter at least one valid recipient email address separated by commas.",
+            "sent_count": 0,
+            "failed_count": 0,
+            "details": []
+        }
+
+    config = db.query(SchedulerConfig).filter(SchedulerConfig.id == 1).first()
+    if not config or not config.smtp_username or not config.smtp_password:
+        return {
+            "success": False,
+            "message": "SMTP not configured. Please set up your Hostinger or Gmail credentials in SMTP Settings first.",
+            "sent_count": 0,
+            "failed_count": len(deduped_recipients),
+            "details": []
+        }
+
+    sender_name = config.sender_name or config.smtp_username
+    subject_raw = (payload.subject or "").strip() or config.email_subject or "Test Campaign Outreach"
+    body_raw = payload.body or config.email_body or "<p>This is a test outreach message.</p>"
+
+    results = []
+    sent_count = 0
+    failed_count = 0
+
+    for to_email in deduped_recipients:
+        # Substitute sample variables if any
+        subj = (
+            subject_raw
+            .replace("{{company_name}}", "Test Corp")
+            .replace("{{website}}", "https://testcorp.com")
+            .replace("{{industry}}", "Technology")
+            .replace("{{city}}", "Ahmedabad")
+            .replace("{{sender_name}}", sender_name)
+        )
+        body = (
+            body_raw
+            .replace("{{company_name}}", "Test Corp")
+            .replace("{{website}}", "https://testcorp.com")
+            .replace("{{industry}}", "Technology")
+            .replace("{{city}}", "Ahmedabad")
+            .replace("{{sender_name}}", sender_name)
+        )
+
+        live_sent, delivery_note, is_blocked = dispatch_gmail_smtp(to_email, subj, body, config=config)
+        if live_sent:
+            sent_count += 1
+            sent_record = SentMail(
+                to_email=to_email,
+                from_email=config.smtp_username,
+                subject=subj,
+                body_snippet=body[:250],
+                status="sent",
+                delivery_mode="live_smtp",
+            )
+            db.add(sent_record)
+            results.append({
+                "email": to_email,
+                "success": True,
+                "note": delivery_note or "Sent successfully"
+            })
+        else:
+            failed_count += 1
+            results.append({
+                "email": to_email,
+                "success": False,
+                "note": delivery_note or "Delivery failed"
+            })
+
+    if sent_count > 0:
+        db.commit()
+
+    all_success = (failed_count == 0)
+    summary_msg = (
+        f"Test mail sent successfully to all {sent_count} account(s)!"
+        if all_success
+        else f"Dispatched: {sent_count} succeeded, {failed_count} failed."
+    )
+
+    return {
+        "success": sent_count > 0,
+        "message": summary_msg,
+        "sent_count": sent_count,
+        "failed_count": failed_count,
+        "details": results
     }
 
 

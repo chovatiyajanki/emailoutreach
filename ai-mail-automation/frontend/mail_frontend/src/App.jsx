@@ -4,29 +4,10 @@ import RichTextEditor, { ensureHtmlContent } from './RichTextEditor'
 
 const MAIL_PRESETS = [
   {
-    label: ' B2B Cold Outreach',
-    subject: 'Partnership & Automation Opportunities for {{company_name}}',
-    body: "<p>Hi {{company_name}} Team,</p><p>I came across <b>{{website}}</b> and noticed your work in <i>{{industry}}</i> across {{city}}. Our platform automates B2B email workflows and communication pipelines.</p><p>Would you be open to a brief <b>10-minute demo</b> next week to see how we can reduce manual outreach by 40%?</p><p>Best regards,<br><b>{{sender_name}}</b></p>"
-  },
-  {
-    label: ' Business Collaboration',
-    subject: 'Potential collaboration with {{company_name}} in {{city}}',
-    body: "<p>Hi there,</p><p>I've been following <b>{{company_name}}</b>'s recent growth in {{city}}. We collaborate with leading {{industry}} companies to streamline client engagement and outreach.</p><p>Are you available for a quick chat this Thursday to explore mutual synergies?</p><p>Best,<br><b>{{sender_name}}</b></p>"
-  },
-  {
-    label: ' 10-Min Demo Request',
-    subject: 'Quick question for {{company_name}} leadership',
-    body: "<p>Hello {{company_name}} Team,</p><p>I checked out <b>{{website}}</b> and was impressed by your execution in the {{industry}} space. We built an automated system specifically helping companies like yours eliminate outreach bottlenecks.</p><p>Would you have <b>10 minutes</b> next Tuesday or Wednesday for a quick look?</p><p>Cheers,<br><b>{{sender_name}}</b></p>"
-  },
-  {
-    label: ' Healthcare & Supplies',
-    subject: 'Supply chain & inventory automation for {{company_name}}',
-    body: "<p>Dear {{company_name}} Management,</p><p>We support healthcare facilities and pharmacies in <b>{{city}}</b> with verified supplier pipelines and automated ordering workflows.</p><p>Could we share a 2-page brief on how we help {{industry}} providers optimize their procurement?</p><p>Warm regards,<br><b>{{sender_name}}</b></p>"
-  },
-  {
-    label: ' Local Business Growth',
-    subject: 'Growth opportunities for {{company_name}} in {{city}}',
-    body: "<p>Hi {{company_name}} Team,</p><p>We are actively working with premier <b>{{industry}}</b> businesses in {{city}} to scale their local outreach and client acquisitions.</p><p>I'd love to share two quick ideas tailored to <b>{{website}}</b>. Do you have 5 minutes this week?</p><p>Best regards,<br><b>{{sender_name}}</b></p>"
+    id: 'insurance_renewal',
+    label: 'Insurance Policy Renewal Reminder',
+    subject: 'Your Insurance Policy Renewal Reminder',
+    body: '<p class="isSelectedEnd">Dear Customer,</p><p class="isSelectedEnd">This is a reminder that your insurance policy is due for renewal.</p><p class="isSelectedEnd"><strong>Policy Details:</strong></p><ul data-spread="false"><li>Policy Type: Health Insurance</li><li>Policy Number: INS-XXXXXX</li><li>Renewal Date: 15 October 2026</li><li>Premium Amount: ₹12,500</li></ul><p class="isSelectedEnd">Please renew your policy before the due date to continue your insurance coverage without interruption.</p><p class="isSelectedEnd">If you have any questions, please contact our customer support team.</p><p>Regards,<br>Customer Support Team<br>ABC Insurance Company</p>'
   }
 ]
 
@@ -125,13 +106,36 @@ export default function App() {
   const [campaignSubject, setCampaignSubject] = useState('')
   const [campaignBody, setCampaignBody] = useState('')
 
+  // Test Send to Multiple Email Accounts modal state
+  const [isTestMailModalOpen, setIsTestMailModalOpen] = useState(false)
+  const [testRecipientEmails, setTestRecipientEmails] = useState('')
+  const [isSendingTestMail, setIsSendingTestMail] = useState(false)
+  const [testMailResult, setTestMailResult] = useState(null)
+
   // Dedicated Mail Editor and Customization state
   const [isMailEditorOpen, setIsMailEditorOpen] = useState(false)
+  const [editorTemplateName, setEditorTemplateName] = useState('')
   const [editorSubject, setEditorSubject] = useState('')
   const [editorBody, setEditorBody] = useState('')
   const [isEnhancing, setIsEnhancing] = useState(false)
   const [enhanceTone, setEnhanceTone] = useState('persuasive')
   const [isSavingTemplate, setIsSavingTemplate] = useState(false)
+  const [customTemplates, setCustomTemplates] = useState(() => {
+    try {
+      const saved = localStorage.getItem('mail_custom_templates')
+      return saved ? JSON.parse(saved) : []
+    } catch {
+      return []
+    }
+  })
+
+  useEffect(() => {
+    try {
+      localStorage.setItem('mail_custom_templates', JSON.stringify(customTemplates))
+    } catch {
+      // Storage unavailable
+    }
+  }, [customTemplates])
 
   // SMTP Settings modal and configuration state
   const [isSmtpModalOpen, setIsSmtpModalOpen] = useState(false)
@@ -154,6 +158,58 @@ export default function App() {
   const [blockedMails, setBlockedMails] = useState([])
   const [replies, setReplies] = useState([])
   const [runs, setRuns] = useState([])
+
+  // Template dropdown selector state (Personalized Email Pitch)
+  const [selectedCampaignTemplateId, setSelectedCampaignTemplateId] = useState('')
+
+  // Compute all available templates (Saved + Mail Editor templates + Campaign templates)
+  const availableTemplates = (() => {
+    const list = [...MAIL_PRESETS, ...(customTemplates || [])]
+
+    // Include server active template if not yet present
+    if (status.email_subject && status.email_body) {
+      const exists = list.some(
+        (t) => (t.subject || '').trim() === (status.email_subject || '').trim()
+      )
+      if (!exists) {
+        list.push({
+          id: 'server_active_template',
+          label: status.email_subject,
+          subject: status.email_subject,
+          body: status.email_body,
+        })
+      }
+    }
+
+    // Include unique campaign templates from database
+    ;(campaigns || []).forEach((c) => {
+      if (c.email_subject && c.email_body) {
+        const exists = list.some(
+          (t) => (t.subject || '').trim() === (c.email_subject || '').trim()
+        )
+        if (!exists) {
+          list.push({
+            id: `campaign_${c.id}`,
+            label: c.name || c.email_subject,
+            subject: c.email_subject,
+            body: c.email_body,
+          })
+        }
+      }
+    })
+
+    return list
+  })()
+
+  const handleSelectCampaignTemplate = (tmplId) => {
+    setSelectedCampaignTemplateId(tmplId)
+    if (!tmplId) return
+    const found = availableTemplates.find((t) => t.id === tmplId)
+    if (found) {
+      setCampaignSubject(found.subject)
+      setCampaignBody(found.body)
+    }
+  }
 
 
   // Fetch status and all data from FastAPI
@@ -486,10 +542,15 @@ export default function App() {
     return replaced
   }
 
-  // Save email template to backend
+  // Save email template to backend and add to template dropdown
   const handleSaveMailTemplate = async () => {
-    setIsSavingTemplate(true)
     const cleanSubject = editorSubject.replace(/<[^>]+>/g, '').trim()
+    if (!cleanSubject && !editorBody.trim()) {
+      alert('Please enter an email subject or message body before saving.')
+      return
+    }
+
+    setIsSavingTemplate(true)
     try {
       const res = await fetch(`${API_BASE}/api/template/save`, {
         method: 'POST',
@@ -497,16 +558,32 @@ export default function App() {
         body: JSON.stringify({
           subject: cleanSubject,
           body: editorBody,
-          campaign_id: status.active_campaign?.id || null,
+          campaign_id: status.active_campaign_id || null,
         }),
       })
       const data = await res.json()
       if (res.ok && data.success) {
-        setCampaignSubject(editorSubject)
+        const tmplTitle = editorTemplateName.trim() || cleanSubject || 'Saved Template'
+        const newTmpl = {
+          id: `custom_${Date.now()}`,
+          label: tmplTitle,
+          subject: cleanSubject,
+          body: editorBody,
+        }
+
+        setCustomTemplates((prev) => {
+          const filtered = (prev || []).filter(
+            (t) => (t.subject || '').trim() !== cleanSubject.trim() && (t.label || '').trim() !== tmplTitle.trim()
+          )
+          return [newTmpl, ...filtered]
+        })
+
+        setSelectedCampaignTemplateId(newTmpl.id)
+        setCampaignSubject(cleanSubject)
         setCampaignBody(editorBody)
         await fetchAllData()
         setIsMailEditorOpen(false)
-        setFeedbackMsg('Email template saved & applied to active outreach!')
+        setFeedbackMsg(`Template "${tmplTitle}" saved & added to Personalized Email Pitch dropdown!`)
       } else {
         alert(data.message || 'Failed to save template.')
       }
@@ -550,6 +627,49 @@ export default function App() {
     }
   }
 
+
+  // Send live test emails to comma-separated email accounts
+  const handleSendTestCampaignEmails = async () => {
+    if (!testRecipientEmails.trim()) {
+      setTestMailResult({ success: false, message: 'Please enter at least one recipient email address.' })
+      return
+    }
+
+    setIsSendingTestMail(true)
+    setTestMailResult(null)
+
+    try {
+      const res = await fetch(`${API_BASE}/api/campaigns/test-send`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          recipient_emails: testRecipientEmails,
+          subject: campaignSubject || undefined,
+          body: campaignBody || undefined,
+        }),
+      })
+
+      const data = await res.json()
+      if (res.ok) {
+        setTestMailResult(data)
+        if (data.success) {
+          fetchAllData()
+        }
+      } else {
+        setTestMailResult({
+          success: false,
+          message: data.message || data.detail || 'Failed to dispatch test emails. Check your SMTP configuration.',
+        })
+      }
+    } catch (err) {
+      setTestMailResult({
+        success: false,
+        message: `Network error: ${err.message || 'Unable to connect to backend server.'}`,
+      })
+    } finally {
+      setIsSendingTestMail(false)
+    }
+  }
 
   // Fresh start: wipe all data in database
   const handleResetAllData = async () => {
@@ -854,22 +974,14 @@ export default function App() {
             <div className="hero-actions-group">
               <button
                 className="btn-create-campaign"
-                onClick={() => setIsCampaignModalOpen(true)}
+                onClick={() => {
+                  if (!campaignSubject && status.email_subject) setCampaignSubject(status.email_subject)
+                  if (!campaignBody && status.email_body) setCampaignBody(status.email_body)
+                  setIsCampaignModalOpen(true)
+                }}
                 title="Create and configure a new outreach campaign"
               >
                 New Campaign
-              </button>
-
-              <button
-                className="btn-mail-editor"
-                onClick={() => {
-                  setEditorSubject(campaignSubject)
-                  setEditorBody(campaignBody)
-                  setIsMailEditorOpen(true)
-                }}
-                title="Edit and customize your email subject, body template, and preview"
-              >
-                Mail Template
               </button>
 
               <button
@@ -1176,7 +1288,11 @@ export default function App() {
                     <button
                       className="btn-create-campaign"
                       style={{ marginTop: '16px' }}
-                      onClick={() => setIsCampaignModalOpen(true)}
+                      onClick={() => {
+                        if (!campaignSubject && status.email_subject) setCampaignSubject(status.email_subject)
+                        if (!campaignBody && status.email_body) setCampaignBody(status.email_body)
+                        setIsCampaignModalOpen(true)
+                      }}
                     >
                        Create First Campaign
                     </button>
@@ -2085,13 +2201,74 @@ export default function App() {
                   <span>Personalized Email Pitch</span>
                 </div>
 
+                {/* Template Selection Dropdown */}
+                <div className="form-group" style={{ marginBottom: '14px' }}>
+                  <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '6px' }}>
+                    <label className="form-label" style={{ margin: 0 }}>Email Template</label>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                      <button
+                        type="button"
+                        className="btn-test-send-pill"
+                        onClick={() => {
+                          setTestMailResult(null)
+                          setIsTestMailModalOpen(true)
+                        }}
+                        title="Send immediate test emails to comma-separated accounts"
+                      >
+                        Test Send to Mails
+                      </button>
+                      <button
+                        type="button"
+                        style={{
+                          background: 'transparent',
+                          border: '1px solid #334155',
+                          color: '#38bdf8',
+                          fontSize: '11.5px',
+                          fontWeight: 600,
+                          padding: '3px 10px',
+                          borderRadius: '6px',
+                          cursor: 'pointer',
+                        }}
+                        onClick={() => {
+                          setEditorSubject(campaignSubject)
+                          setEditorBody(campaignBody)
+                          setEditorTemplateName('')
+                          setIsMailEditorOpen(true)
+                        }}
+                        title="Open Mail Editor to create or edit templates"
+                      >
+                        + Create in Mail Editor
+                      </button>
+                    </div>
+                  </div>
+                  <select
+                    className="campaign-form-input"
+                    value={
+                      selectedCampaignTemplateId ||
+                      (availableTemplates.find((t) => (t.subject || '').trim() === (campaignSubject || '').trim())?.id || '')
+                    }
+                    onChange={(e) => handleSelectCampaignTemplate(e.target.value)}
+                  >
+                    <option value="">Select an email template to auto-fill...</option>
+                    {availableTemplates.map((tmpl) => (
+                      <option key={tmpl.id} value={tmpl.id}>
+                        {tmpl.label}
+                      </option>
+                    ))}
+                  </select>
+                  <span className="field-hint">Select a template to automatically populate the subject line and message body</span>
+                </div>
+
                 <div className="form-group">
                   <label className="form-label">Email Subject</label>
                   <input
                     type="text"
                     className="campaign-form-input"
                     value={campaignSubject}
-                    onChange={(e) => setCampaignSubject(e.target.value)}
+                    onChange={(e) => {
+                      setCampaignSubject(e.target.value)
+                      setSelectedCampaignTemplateId('')
+                    }}
                     placeholder="Enter email subject (e.g. Partnership Opportunities for {{company_name}})"
                   />
                 </div>
@@ -2254,35 +2431,25 @@ export default function App() {
 
             {/* Body */}
             <div className="campaign-modal-body">
-              {/* Presets Strip */}
-              <div>
-                <span style={{ fontSize: '12px', fontWeight: 600, color: '#94a3b8', display: 'block', marginBottom: '8px' }}>
-                   Quick Load Proven Templates:
-                </span>
-                <div className="template-presets-grid">
-                  {MAIL_PRESETS.map((preset) => (
-                    <button
-                      key={preset.label}
-                      type="button"
-                      className="preset-template-btn"
-                      onClick={() => {
-                        setEditorSubject(preset.subject)
-                        setEditorBody(preset.body)
-                      }}
-                      title="Load this template into editor"
-                    >
-                      {preset.label}
-                    </button>
-                  ))}
-                </div>
-              </div>
-
               {/* Two Column Grid: Editor (Left) & Live Preview (Right) */}
               <div className="mail-editor-grid">
                 {/* LEFT: EDIT PANE */}
                 <div className="editor-pane">
                   <div className="pane-section-title">
                     <span>Edit Email Template</span>
+                  </div>
+
+                  {/* Template Name (Optional) */}
+                  <div className="form-group" style={{ marginBottom: '12px' }}>
+                    <label className="form-label">Template Name (Optional)</label>
+                    <input
+                      type="text"
+                      className="campaign-form-input"
+                      value={editorTemplateName}
+                      onChange={(e) => setEditorTemplateName(e.target.value)}
+                      placeholder="e.g. My Outreach Pitch (defaults to subject line)"
+                    />
+                    <span className="field-hint">Name to display in the email template dropdown</span>
                   </div>
 
                   {/* Subject Line */}
@@ -2412,7 +2579,7 @@ export default function App() {
                   disabled={isSavingTemplate}
                   onClick={handleSaveMailTemplate}
                 >
-                  {isSavingTemplate ? 'Saving...' : 'Save & Apply Template'}
+                  {isSavingTemplate ? 'Saving...' : 'Save & Add to Templates'}
                 </button>
               </div>
             </div>
@@ -2681,6 +2848,179 @@ export default function App() {
                   title="Save manual SMTP credentials to DataBase for future campaigns"
                 >
                   {smtpSaving ? 'Saving...' : ' Save SMTP Settings'}
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* MODAL 4: TEST SEND TO MAILS MODAL */}
+      {isTestMailModalOpen && (
+        <div
+          className="campaign-modal-backdrop test-send-modal-backdrop"
+          style={{ zIndex: 10050 }}
+          onClick={() => !isSendingTestMail && setIsTestMailModalOpen(false)}
+        >
+          <div
+            className="campaign-modal-dialog test-send-modal-dialog"
+            style={{ maxWidth: '640px', zIndex: 10051 }}
+            onClick={(e) => e.stopPropagation()}
+          >
+            {/* Header */}
+            <div className="campaign-modal-header" style={{ background: 'linear-gradient(180deg, #101c38, #0b1426)' }}>
+              <div className="campaign-header-left">
+                <div className="campaign-icon-badge" style={{ background: 'linear-gradient(135deg, #0284c7, #0ea5e9)' }}></div>
+                <div>
+                  <h3 className="campaign-modal-title">Test Send to Email Accounts</h3>
+                  <p className="campaign-modal-subtitle">
+                    Send test outreach emails immediately to multiple comma-separated accounts
+                  </p>
+                </div>
+              </div>
+              <button
+                type="button"
+                className="campaign-close-x-btn"
+                onClick={() => !isSendingTestMail && setIsTestMailModalOpen(false)}
+                title="Close dialog"
+              >
+                ✕
+              </button>
+            </div>
+
+            {/* Body */}
+            <div className="campaign-modal-body" style={{ maxHeight: '70vh', overflowY: 'auto' }}>
+              <div className="campaign-section-card">
+                <div className="section-card-title">
+                  <span>Recipient Email Accounts</span>
+                </div>
+                <div className="form-group">
+                  <label className="form-label">
+                    Enter Email Addresses (Comma Separated) <span className="field-required">*</span>
+                  </label>
+                  <textarea
+                    className="campaign-form-input campaign-form-textarea"
+                    rows={3}
+                    value={testRecipientEmails}
+                    onChange={(e) => {
+                      setTestRecipientEmails(e.target.value)
+                      setTestMailResult(null)
+                    }}
+                    placeholder="e.g. test1@gmail.com, test2@yahoo.com, outreach.test@domain.com"
+                    disabled={isSendingTestMail}
+                  />
+                  <span className="field-hint">
+                    Enter multiple recipient email accounts separated by commas, semicolons, or line breaks.
+                  </span>
+                </div>
+              </div>
+
+              {/* Pitch Preview */}
+              <div className="campaign-section-card" style={{ marginTop: '12px' }}>
+                <div className="section-card-title">
+                  <span>Email Pitch Preview</span>
+                </div>
+                <div style={{ marginBottom: '8px' }}>
+                  <span style={{ fontSize: '12px', color: '#94a3b8', fontWeight: 600 }}>Subject: </span>
+                  <span style={{ fontSize: '13px', color: '#e2e8f0', fontWeight: 600 }}>
+                    {campaignSubject || status.email_subject || '(Default subject will be used)'}
+                  </span>
+                </div>
+                <div>
+                  <span style={{ fontSize: '12px', color: '#94a3b8', fontWeight: 600 }}>Body Snippet: </span>
+                  <div
+                    style={{
+                      marginTop: '6px',
+                      padding: '10px 12px',
+                      background: '#090d16',
+                      border: '1px solid #1e293b',
+                      borderRadius: '6px',
+                      fontSize: '12.5px',
+                      color: '#cbd5e1',
+                      maxHeight: '120px',
+                      overflowY: 'auto',
+                      whiteSpace: 'pre-wrap',
+                      lineHeight: 1.5,
+                    }}
+                  >
+                    {campaignBody || status.email_body || '(Default body template will be used)'}
+                  </div>
+                </div>
+                <div style={{ marginTop: '8px', fontSize: '11px', color: '#64748b' }}>
+                  Active SMTP sender: <strong style={{ color: '#38bdf8' }}>{status.mailbox?.email || 'Not configured'}</strong>
+                </div>
+              </div>
+
+              {/* Sending status */}
+              {isSendingTestMail && (
+                <div className="smtp-test-status loading" style={{ marginTop: '12px' }}>
+                  <span>Sending test emails live via SMTP... Please wait...</span>
+                </div>
+              )}
+
+              {/* Results status */}
+              {testMailResult && !isSendingTestMail && (
+                <div
+                  className={`smtp-test-status ${testMailResult.success ? 'success' : 'error'}`}
+                  style={{ marginTop: '12px', flexDirection: 'column', alignItems: 'flex-start', gap: '6px' }}
+                >
+                  <div style={{ display: 'flex', alignItems: 'center', gap: '6px', width: '100%' }}>
+                    <span>{testMailResult.success ? '[OK] ' : '[Error] '}</span>
+                    <strong style={{ flex: 1 }}>{testMailResult.message}</strong>
+                    {testMailResult.sent_count !== undefined && (
+                      <span style={{ fontSize: '12px', opacity: 0.9 }}>
+                        Sent: {testMailResult.sent_count} | Failed: {testMailResult.failed_count}
+                      </span>
+                    )}
+                  </div>
+                  {testMailResult.details && testMailResult.details.length > 0 && (
+                    <div style={{ width: '100%', marginTop: '6px', maxHeight: '100px', overflowY: 'auto' }}>
+                      {testMailResult.details.map((d, i) => (
+                        <div
+                          key={i}
+                          style={{
+                            fontSize: '11.5px',
+                            display: 'flex',
+                            justifyContent: 'space-between',
+                            padding: '2px 0',
+                            borderBottom: '1px dashed rgba(255,255,255,0.1)',
+                            color: d.success ? '#86efac' : '#fca5a5',
+                          }}
+                        >
+                          <span>{d.email}</span>
+                          <span>{d.note}</span>
+                        </div>
+                      ))}
+                    </div>
+                  )}
+                </div>
+              )}
+            </div>
+
+            {/* Footer */}
+            <div className="campaign-modal-footer">
+              <div className="footer-left-status">
+                <span style={{ fontSize: '12px', color: '#64748b' }}>
+                  Sent messages will be recorded in the Sent Mails table.
+                </span>
+              </div>
+              <div className="footer-right-actions">
+                <button
+                  type="button"
+                  className="btn-campaign-cancel"
+                  onClick={() => setIsTestMailModalOpen(false)}
+                  disabled={isSendingTestMail}
+                >
+                  Cancel
+                </button>
+                <button
+                  type="button"
+                  className="btn-campaign-launch"
+                  onClick={handleSendTestCampaignEmails}
+                  disabled={isSendingTestMail || !testRecipientEmails.trim()}
+                  style={{ background: '#0284c7' }}
+                >
+                  {isSendingTestMail ? 'Sending...' : 'OK - Send Test Mails'}
                 </button>
               </div>
             </div>

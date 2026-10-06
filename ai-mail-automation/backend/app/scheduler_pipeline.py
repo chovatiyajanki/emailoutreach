@@ -770,7 +770,7 @@ def run_scheduler_cycle(
 
         # Dispatch live via configured SMTP and sync to Gmail Sent Mailbox if Gmail
         live_sent, delivery_note, is_blocked = dispatch_gmail_smtp(acc.email, subj, body, config=config)
-        delivery_mode = "live_smtp" if "Live" in delivery_note else ("blocked_by_google" if is_blocked else "smtp_synced")
+        delivery_mode = "live_smtp" if "Live" in delivery_note else ("blocked_by_google" if is_blocked else ("failed_network_unreachable" if not live_sent else "smtp_synced"))
 
         undelivered_item = None
         if is_blocked:
@@ -793,6 +793,10 @@ def run_scheduler_cycle(
             existing_sup = db.query(SuppressionList).filter(SuppressionList.email == acc.email).first()
             if not existing_sup:
                 db.add(SuppressionList(email=acc.email, reason="Google message blocked"))
+        elif not live_sent:
+            item_status = "delivery_failed"
+            acc.status = "delivery_failed"
+            log(f"  SMTP Delivery failed for <{acc.email}>! Diagnostic: {delivery_note}")
         else:
             item_status = "sent"
             acc.status = "sent"

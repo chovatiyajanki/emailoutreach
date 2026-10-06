@@ -85,43 +85,30 @@ export default function App() {
 
   // Editable config state (User-controlled, NEVER overwritten by polling)
   const [editQuery, setEditQuery] = useState('')
-  const [editInterval, setEditInterval] = useState(60)
-  const [editScrapeBatch, setEditScrapeBatch] = useState(5)
-  const [editSendBatch, setEditSendBatch] = useState(5)
+  const [editInterval, setEditInterval] = useState('')
+  const [editScrapeBatch, setEditScrapeBatch] = useState('')
+  const [editSendBatch, setEditSendBatch] = useState('')
   const hasInitializedConfig = useRef(false)
+  const isFetchingRef = useRef(false)
 
   // Campaign modal and configuration state
   const [isCampaignModalOpen, setIsCampaignModalOpen] = useState(false)
-  const [campaignName, setCampaignName] = useState('Medical Stores Outreach Campaign')
-  const [campaignSubject, setCampaignSubject] = useState('Partnership & Automation Opportunities for {{company_name}}')
-  const [campaignBody, setCampaignBody] = useState(
-    "Hi {{company_name}} Team,\n\n" +
-    "I came across {{website}} and noticed your work in {{industry}}. Our platform automates B2B email workflows and communication pipelines.\n\n" +
-    "Would you be open to a 10-minute demo next week?\n\n" +
-    "Best regards,\n" +
-    "{{sender_name}}"
-  )
+  const [campaignName, setCampaignName] = useState('')
+  const [campaignSubject, setCampaignSubject] = useState('')
+  const [campaignBody, setCampaignBody] = useState('')
 
   // Dedicated Mail Editor and Customization state
   const [isMailEditorOpen, setIsMailEditorOpen] = useState(false)
-  const [editorSubject, setEditorSubject] = useState(
-    'Partnership & Automation Opportunities for {{company_name}}'
-  )
-  const [editorBody, setEditorBody] = useState(
-    "Hi {{company_name}} Team,\n\n" +
-    "I came across {{website}} and noticed your work in {{industry}} across {{city}}. Our platform automates B2B email workflows and communication pipelines.\n\n" +
-    "Would you be open to a 10-minute demo next week?\n\n" +
-    "Best regards,\n" +
-    "{{sender_name}}"
-  )
+  const [editorSubject, setEditorSubject] = useState('')
+  const [editorBody, setEditorBody] = useState('')
   const [isEnhancing, setIsEnhancing] = useState(false)
   const [enhanceTone, setEnhanceTone] = useState('persuasive')
   const [isSavingTemplate, setIsSavingTemplate] = useState(false)
 
   // SMTP Settings modal and configuration state
   const [isSmtpModalOpen, setIsSmtpModalOpen] = useState(false)
-  const [smtpHost, setSmtpHost] = useState('smtp.hostinger.com')
-  const [smtpPort, setSmtpPort] = useState(465)
+  const [smtpHost, setSmtpHost] = useState('')
+  const [smtpPort, setSmtpPort] = useState('')
   const [smtpUsername, setSmtpUsername] = useState('')
   const [smtpPassword, setSmtpPassword] = useState('')
   const [smtpSenderName, setSmtpSenderName] = useState('')
@@ -143,6 +130,8 @@ export default function App() {
 
   // Fetch status and all data from FastAPI
   const fetchAllData = async () => {
+    if (isFetchingRef.current) return
+    isFetchingRef.current = true
     try {
       const [resStatus, resAccounts, resSent, resBounced, resBlocked, resUndelivered, resReplies, resRuns, resCampaigns] = await Promise.all([
         fetch(`${API_BASE}/api/scheduler/status`),
@@ -163,13 +152,6 @@ export default function App() {
         // NEVER overwrite inputs during background polling!
         if (!hasInitializedConfig.current) {
           hasInitializedConfig.current = true
-          setEditQuery(data.search_query && data.search_query !== 'B2B Software and Tech Companies' ? data.search_query : '')
-          setEditInterval(data.interval_seconds || 60)
-          setEditScrapeBatch(data.scrape_batch_size || 5)
-          setEditSendBatch(data.send_batch_size || 5)
-          if (data.campaign_name) setCampaignName(data.campaign_name)
-          if (data.email_subject) setCampaignSubject(data.email_subject)
-          if (data.email_body) setCampaignBody(data.email_body)
         }
       }
       if (resAccounts.ok) setAccounts(await resAccounts.json())
@@ -185,6 +167,8 @@ export default function App() {
       }
     } catch {
       // Backend polling error
+    } finally {
+      isFetchingRef.current = false
     }
   }
 
@@ -208,24 +192,26 @@ export default function App() {
   useEffect(() => {
     fetchAllData()
     fetchSmtpSettings()
-    const timer = setInterval(fetchAllData, 3000)
+    const timer = setInterval(fetchAllData, 5000)
     return () => clearInterval(timer)
   }, [])
 
-  // Start or Stop the automated scheduler
+  // Start or Stop the automated scheduler (Instant 1-Click Response)
   const handleToggleScheduler = async () => {
     try {
       if (!status.is_running) {
-        // Automatically save current inputs before starting
+        // Optimistic UI update on start
+        setStatus((prev) => ({ ...prev, is_running: true }))
+        setFeedbackMsg(`Starting autopilot for "${campaignName}"...`)
         await fetch(`${API_BASE}/api/scheduler/config`, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({
             campaign_name: campaignName,
             search_query: editQuery,
-            interval_seconds: Number(editInterval),
-            scrape_batch_size: Number(editScrapeBatch),
-            send_batch_size: Number(editSendBatch),
+            interval_seconds: Number(editInterval) || 60,
+            scrape_batch_size: Number(editScrapeBatch) || 5,
+            send_batch_size: Number(editSendBatch) || 5,
             email_subject: campaignSubject,
             email_body: campaignBody,
           }),
@@ -233,24 +219,33 @@ export default function App() {
         const res = await fetch(`${API_BASE}/api/scheduler/start`, { method: 'POST' })
         if (res.ok) {
           await fetchAllData()
-          setFeedbackMsg(`Scheduler started for "${campaignName}"! Running every ${editInterval >= 60 ? (editInterval / 60) + ' min' : editInterval + 's'}.`)
+          const intvVal = Number(editInterval) || 60
+          setFeedbackMsg(`Scheduler started for "${campaignName || 'Campaign'}"! Running every ${intvVal >= 60 ? Math.round(intvVal / 60) + ' min' : intvVal + 's'}.`)
+        } else {
+          setStatus((prev) => ({ ...prev, is_running: false }))
+          setFeedbackMsg('Failed to start scheduler.')
         }
       } else {
+        // INSTANT 1-CLICK OPTIMISTIC PAUSE: Immediately change button to idle without waiting
+        setStatus((prev) => ({ ...prev, is_running: false }))
+        setFeedbackMsg('Autopilot paused.')
         const res = await fetch(`${API_BASE}/api/scheduler/stop`, { method: 'POST' })
         if (res.ok) {
           await fetchAllData()
-          setFeedbackMsg('Scheduler stopped.')
+        } else {
+          setStatus((prev) => ({ ...prev, is_running: true }))
+          setFeedbackMsg('Failed to stop scheduler on server.')
         }
       }
     } catch {
-      setFeedbackMsg('Failed to toggle scheduler. Check backend connection.')
+      setFeedbackMsg('Network error while toggling scheduler.')
     }
   }
 
   // Trigger an immediate 5-step cycle right now with current UI parameters
   const handleTriggerNow = async () => {
     setIsTriggering(true)
-    setFeedbackMsg(`Executing cycle for "${editQuery || 'All Companies'}" (Scrape: ${editScrapeBatch}, Send: ${editSendBatch})...`)
+    setFeedbackMsg(`Executing cycle for "${editQuery || 'All Companies'}" (Scrape: ${editScrapeBatch || 5}, Send: ${editSendBatch || 5})...`)
     try {
       const res = await fetch(`${API_BASE}/api/scheduler/trigger`, {
         method: 'POST',
@@ -258,8 +253,8 @@ export default function App() {
         body: JSON.stringify({
           campaign_name: campaignName,
           query: editQuery,
-          scrape_batch_size: Number(editScrapeBatch),
-          send_batch_size: Number(editSendBatch),
+          scrape_batch_size: Number(editScrapeBatch) || 5,
+          send_batch_size: Number(editSendBatch) || 5,
           email_subject: campaignSubject,
           email_body: campaignBody,
         }),
@@ -282,7 +277,7 @@ export default function App() {
   const handleLaunchCampaign = async () => {
     setIsTriggering(true)
     setIsCampaignModalOpen(false)
-    setFeedbackMsg(`Creating and launching campaign "${campaignName}" for "${editQuery || 'All Companies'}"...`)
+    setFeedbackMsg(`Creating and launching campaign "${campaignName || 'Campaign'}" for "${editQuery || 'All Companies'}"...`)
     try {
       const res = await fetch(`${API_BASE}/api/campaigns/create`, {
         method: 'POST',
@@ -290,9 +285,9 @@ export default function App() {
         body: JSON.stringify({
           name: campaignName,
           search_query: editQuery,
-          scrape_batch_size: Number(editScrapeBatch),
-          send_batch_size: Number(editSendBatch),
-          interval_seconds: Number(editInterval),
+          scrape_batch_size: Number(editScrapeBatch) || 5,
+          send_batch_size: Number(editSendBatch) || 5,
+          interval_seconds: Number(editInterval) || 60,
           email_subject: campaignSubject,
           email_body: campaignBody,
           set_active: true,
@@ -302,7 +297,7 @@ export default function App() {
       if (res.ok) {
         await fetchAllData()
         handleSelectTab('campaigns')
-        setFeedbackMsg(`Campaign "${campaignName}" launched! 5-step cycle executed and metrics updated.`)
+        setFeedbackMsg(`Campaign "${campaignName || 'Campaign'}" launched! 5-step cycle executed and metrics updated.`)
       } else {
         setFeedbackMsg('Campaign execution encountered an error.')
       }
@@ -323,9 +318,9 @@ export default function App() {
         body: JSON.stringify({
           name: campaignName,
           search_query: editQuery,
-          interval_seconds: Number(editInterval),
-          scrape_batch_size: Number(editScrapeBatch),
-          send_batch_size: Number(editSendBatch),
+          interval_seconds: Number(editInterval) || 60,
+          scrape_batch_size: Number(editScrapeBatch) || 5,
+          send_batch_size: Number(editSendBatch) || 5,
           email_subject: campaignSubject,
           email_body: campaignBody,
           set_active: true,
@@ -335,7 +330,8 @@ export default function App() {
       if (res.ok) {
         await fetchAllData()
         handleSelectTab('campaigns')
-        setFeedbackMsg(`Campaign "${campaignName}" saved & Scheduler started! Running every ${editInterval >= 60 ? (editInterval / 60) + ' min' : editInterval + 's'}.`)
+        const intvVal = Number(editInterval) || 60
+        setFeedbackMsg(`Campaign "${campaignName || 'Campaign'}" saved & Scheduler started! Running every ${intvVal >= 60 ? Math.round(intvVal / 60) + ' min' : intvVal + 's'}.`)
       }
     } catch {
       setFeedbackMsg('Failed to save campaign and start scheduler.')
@@ -352,9 +348,9 @@ export default function App() {
         body: JSON.stringify({
           name: campaignName,
           search_query: editQuery,
-          interval_seconds: Number(editInterval),
-          scrape_batch_size: Number(editScrapeBatch),
-          send_batch_size: Number(editSendBatch),
+          interval_seconds: Number(editInterval) || 60,
+          scrape_batch_size: Number(editScrapeBatch) || 5,
+          send_batch_size: Number(editSendBatch) || 5,
           email_subject: campaignSubject,
           email_body: campaignBody,
           set_active: false,
@@ -364,7 +360,7 @@ export default function App() {
       if (res.ok) {
         await fetchAllData()
         handleSelectTab('campaigns')
-        setFeedbackMsg(`Campaign "${campaignName}" saved successfully.`)
+        setFeedbackMsg(`Campaign "${campaignName || 'Campaign'}" saved successfully.`)
       }
     } catch {
       setFeedbackMsg('Failed to save campaign.')
@@ -1916,7 +1912,7 @@ export default function App() {
                     className="campaign-form-input"
                     value={campaignName}
                     onChange={(e) => setCampaignName(e.target.value)}
-                    placeholder="e.g. Medical Stores Outreach Campaign"
+                    placeholder="Enter campaign title (e.g. Real Estate Outreach)"
                   />
                 </div>
 
@@ -1950,7 +1946,7 @@ export default function App() {
                         onClick={() => {
                           setEditQuery(preset.query)
                           setCampaignName(preset.name)
-                        }}Database
+                        }}
                       >
                         {preset.label}
                       </button>
@@ -1975,7 +1971,8 @@ export default function App() {
                       max="50"
                       className="campaign-form-input"
                       value={editScrapeBatch}
-                      onChange={(e) => setEditScrapeBatch(Math.max(0, parseInt(e.target.value) || 0))}
+                      onChange={(e) => setEditScrapeBatch(e.target.value === '' ? '' : Math.max(0, parseInt(e.target.value, 10) || 0))}
+                      placeholder="e.g. 5"
                     />
                     <span className="field-hint">Leads scraped per cycle</span>
                   </div>
@@ -1988,7 +1985,8 @@ export default function App() {
                       max="50"
                       className="campaign-form-input"
                       value={editSendBatch}
-                      onChange={(e) => setEditSendBatch(Math.max(0, parseInt(e.target.value) || 0))}
+                      onChange={(e) => setEditSendBatch(e.target.value === '' ? '' : Math.max(0, parseInt(e.target.value, 10) || 0))}
+                      placeholder="e.g. 5"
                     />
                     <span className="field-hint">Emails sent per cycle</span>
                   </div>
@@ -1998,8 +1996,9 @@ export default function App() {
                     <select
                       className="campaign-form-input"
                       value={editInterval}
-                      onChange={(e) => setEditInterval(Number(e.target.value))}
+                      onChange={(e) => setEditInterval(e.target.value === '' ? '' : Number(e.target.value))}
                     >
+                      <option value="">Select interval...</option>
                       <option value={30}>30 seconds (Fast Test)</option>
                       <option value={60}>1 minute</option>
                       <option value={120}>2 minutes</option>
@@ -2028,7 +2027,7 @@ export default function App() {
                     className="campaign-form-input"
                     value={campaignSubject}
                     onChange={(e) => setCampaignSubject(e.target.value)}
-                    placeholder="Partnership & Automation Opportunities for {{company_name}}"
+                    placeholder="Enter email subject (e.g. Partnership Opportunities for {{company_name}})"
                   />
                 </div>
 
@@ -2229,7 +2228,7 @@ export default function App() {
                       className="campaign-form-input"
                       value={editorSubject}
                       onChange={(e) => setEditorSubject(e.target.value)}
-                      placeholder="e.g. Partnership & Automation Opportunities for {{company_name}}"
+                      placeholder="Enter email subject (e.g. Partnership Opportunities for {{company_name}})"
                     />
                   </div>
 
@@ -2335,11 +2334,11 @@ export default function App() {
                   type="button"
                   className="btn-campaign-save-only"
                   onClick={() => {
-                    setEditorSubject('Partnership & Automation Opportunities for {{company_name}}')
-                    setEditorBody("Hi {{company_name}} Team,\n\nI came across {{website}} and noticed your work in {{industry}} across {{city}}. Our platform automates B2B email workflows and communication pipelines.\n\nWould you be open to a 10-minute demo next week?\n\nBest regards,\n{{sender_name}}")
+                    setEditorSubject('')
+                    setEditorBody('')
                   }}
                 >
-                  ↺ Reset Default
+                  Clear Template
                 </button>
                 <button
                   type="button"

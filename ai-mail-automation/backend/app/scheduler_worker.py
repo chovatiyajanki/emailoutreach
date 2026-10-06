@@ -11,43 +11,51 @@ _scheduler_task: Optional[asyncio.Task] = None
 _is_cycle_in_progress: bool = False
 
 
+def _run_cycle_sync():
+    """Executes the synchronous 5-step scheduler cycle in a dedicated background thread."""
+    with SessionLocal() as db:
+        run_scheduler_cycle(db)
+
+
 async def scheduler_loop():
     """
     Background asynchronous loop that runs inside FastAPI.
     Monitors SchedulerConfig and triggers run_scheduler_cycle() when due.
     """
     global _is_cycle_in_progress
-    print("🔔 Automated Outreach Scheduler Worker Started!")
+    print("Automated Outreach Scheduler Worker Started!")
 
     while True:
         try:
-            await asyncio.sleep(4)
+            await asyncio.sleep(3)
             if _is_cycle_in_progress:
                 continue
 
+            is_due = False
+            total_runs = 0
             with SessionLocal() as db:
                 config = db.query(SchedulerConfig).filter(SchedulerConfig.id == 1).first()
                 if not config or not config.is_running:
                     continue
 
                 now = utc_now()
+                total_runs = config.total_runs
                 # Check if it's time to run
-                is_due = False
                 if not config.last_run_at or not config.next_run_at:
                     is_due = True
                 elif now >= config.next_run_at:
                     is_due = True
 
-                if is_due:
-                    _is_cycle_in_progress = True
-                    print(f"[Scheduler] Interval Triggered! Running cycle #{config.total_runs + 1}...")
-                    try:
-                        # Run the 5-step pipeline cycle
-                        run_scheduler_cycle(db)
-                    except Exception as e:
-                        print(f"[Scheduler] Error in scheduler cycle execution: {e}")
-                    finally:
-                        _is_cycle_in_progress = False
+            if is_due:
+                _is_cycle_in_progress = True
+                print(f"[Scheduler] Interval Triggered! Running cycle #{total_runs + 1} in background thread...")
+                try:
+                    # Run the 5-step pipeline cycle in a thread so FastAPI's event loop is NEVER blocked
+                    await asyncio.to_thread(_run_cycle_sync)
+                except Exception as e:
+                    print(f"[Scheduler] Error in scheduler cycle execution: {e}")
+                finally:
+                    _is_cycle_in_progress = False
 
         except asyncio.CancelledError:
             print("[Scheduler] Worker task cancelled.")

@@ -713,6 +713,15 @@ def run_scheduler_cycle(
     sent_records = []
     undelivered_records = []
     for acc in accounts_to_contact:
+        # Check if user requested pause via Pause Autopilot
+        try:
+            db.refresh(config)
+            if not config.is_running:
+                log("  Autopilot pause requested. Stopping further email dispatches.")
+                break
+        except Exception:
+            pass
+
         acc_email = acc.email.strip().lower()
         acc_dom = extract_domain(acc.website) or extract_domain(acc_email)
         acc_norm = normalize_company_name(acc.company_name)
@@ -733,15 +742,8 @@ def run_scheduler_cycle(
         sender_name = (config.sender_name if config and config.sender_name else None) or (config.smtp_username.split('@')[0] if config and config.smtp_username else "Outreach Specialist")
         sender_email = (config.smtp_username if config and config.smtp_username else None) or "unconfigured@local"
 
-        subj_tmpl = target_campaign.email_subject or config.email_subject or "Partnership & Automation Opportunities for {{company_name}}"
-        body_tmpl = target_campaign.email_body or config.email_body or (
-            "Hi {{company_name}} Team,\n\n"
-            "I came across {{website}} and noticed your work in {{industry}}. "
-            "Our platform automates B2B email workflows and communication pipelines.\n\n"
-            "Would you be open to a 10-minute demo next week?\n\n"
-            "Best regards,\n"
-            "{{sender_name}}"
-        )
+        subj_tmpl = (target_campaign.email_subject if target_campaign and target_campaign.email_subject else None) or config.email_subject or ""
+        body_tmpl = (target_campaign.email_body if target_campaign and target_campaign.email_body else None) or config.email_body or ""
         base_subj = (
             subj_tmpl
             .replace("{{company_name}}", acc.company_name)

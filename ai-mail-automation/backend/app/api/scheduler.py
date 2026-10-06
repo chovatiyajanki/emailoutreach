@@ -302,15 +302,8 @@ def manual_send_emails(payload: Optional[SendMailRequest] = None, db: Session = 
     sender_email = (config.smtp_username if config and config.smtp_username else None) or "unconfigured@local"
     sender_name = (config.sender_name if config and config.sender_name else None) or (config.smtp_username.split('@')[0] if config and config.smtp_username else "Outreach Specialist")
 
-    subj_tmpl = (target_campaign.email_subject if target_campaign else None) or config.email_subject or "Partnership & Automation Opportunities for {{company_name}}"
-    body_tmpl = (target_campaign.email_body if target_campaign else None) or config.email_body or (
-        "Hi {{company_name}} Team,\n\n"
-        "I came across {{website}} and noticed your work in {{industry}}. "
-        "Our platform automates B2B email workflows and communication pipelines.\n\n"
-        "Would you be open to a 10-minute demo next week?\n\n"
-        "Best regards,\n"
-        "{{sender_name}}"
-    )
+    subj_tmpl = (target_campaign.email_subject if target_campaign and target_campaign.email_subject else None) or config.email_subject or ""
+    body_tmpl = (target_campaign.email_body if target_campaign and target_campaign.email_body else None) or config.email_body or ""
 
     suppressed_emails = set(row[0] for row in db.query(SuppressionList.email).all())
     sent_records = []
@@ -665,24 +658,21 @@ def get_scheduler_status(db: Session = Depends(get_db)):
             if act:
                 active_camp_id = str(act.id)
                 active_camp_name = act.name
-        if not active_camp_id:
-            first_c = db.query(Campaign).order_by(desc(Campaign.created_at)).first()
-            if first_c:
-                active_camp_id = str(first_c.id)
-                active_camp_name = first_c.name
-                config.active_campaign_id = first_c.id
-                db.commit()
+                active_subj = act.email_subject or ""
+                active_body = act.email_body or ""
+                active_query = act.search_query or ""
+
 
     return {
         "is_running": config.is_running,
         "interval_seconds": config.interval_seconds,
-        "search_query": config.search_query,
+        "search_query": config.search_query or active_query or "",
         "scrape_batch_size": config.scrape_batch_size,
         "send_batch_size": config.send_batch_size,
-        "campaign_name": active_camp_name,
+        "campaign_name": active_camp_name or config.campaign_name or "",
         "active_campaign_id": active_camp_id,
-        "email_subject": config.email_subject or "Partnership & Automation Opportunities for {{company_name}}",
-        "email_body": config.email_body or "Hi {{company_name}} Team,\n\nI came across {{website}} and noticed your work in {{industry}}. Our platform automates B2B email workflows and communication pipelines.\n\nWould you be open to a 10-minute demo next week?\n\nBest regards,\n{{sender_name}}",
+        "email_subject": active_subj or config.email_subject or "",
+        "email_body": active_body or config.email_body or "",
         "last_run_at": config.last_run_at.isoformat() if config.last_run_at else None,
         "next_run_at": config.next_run_at.isoformat() if config.next_run_at else None,
         "seconds_until_next_run": seconds_left,
@@ -703,7 +693,7 @@ def get_scheduler_status(db: Session = Depends(get_db)):
         "mailbox": {
             "email": config.smtp_username or "",
             "name": config.sender_name or "",
-            "smtp_host": f"{config.smtp_host or 'smtp.hostinger.com'}:{config.smtp_port or 465}" if (config.smtp_username and config.smtp_password) else "",
+            "smtp_host": f"{config.smtp_host}:{config.smtp_port}" if (config.smtp_username and config.smtp_password and config.smtp_host) else "",
             "is_configured": bool(config.smtp_username and config.smtp_password),
             "status": "connected_live" if (config.smtp_username and config.smtp_password) else "not_configured",
         },
@@ -1055,6 +1045,10 @@ def reset_all_database(db: Session = Depends(get_db)):
         config.is_running = False
         config.last_run_at = None
         config.next_run_at = None
+        config.search_query = ""
+        config.campaign_name = ""
+        config.email_subject = ""
+        config.email_body = ""
 
     db.commit()
     return {"success": True, "message": "All database tables wiped clean. Fresh start ready."}
@@ -1065,11 +1059,11 @@ def get_smtp_settings(db: Session = Depends(get_db)):
     """Fetches currently configured manual SMTP server settings from PostgreSQL"""
     config = db.query(SchedulerConfig).filter(SchedulerConfig.id == 1).first()
     return {
-        "smtp_host": (config.smtp_host if config and config.smtp_host else "") or "smtp.hostinger.com",
-        "smtp_port": (config.smtp_port if config and config.smtp_port else 465),
-        "smtp_username": (config.smtp_username if config and config.smtp_username else ""),
-        "smtp_password": (config.smtp_password if config and config.smtp_password else ""),
-        "sender_name": (config.sender_name if config and config.sender_name else ""),
+        "smtp_host": (config.smtp_host if config and config.smtp_host else "") or "",
+        "smtp_port": (config.smtp_port if config and config.smtp_port else "") or "",
+        "smtp_username": (config.smtp_username if config and config.smtp_username else "") or "",
+        "smtp_password": (config.smtp_password if config and config.smtp_password else "") or "",
+        "sender_name": (config.sender_name if config and config.sender_name else "") or "",
     }
 
 

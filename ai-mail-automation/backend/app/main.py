@@ -22,16 +22,24 @@ def init_database_tables():
                     id=1,
                     is_running=False,
                     interval_seconds=60,
-                    search_query="B2B Software and Tech Companies",
+                    search_query="",
                     scrape_batch_size=5,
                     send_batch_size=5,
                     total_runs=0,
+                    campaign_name="",
+                    email_subject="",
+                    email_body="",
+                    smtp_host="",
+                    smtp_port=None,
                 )
                 db.add(config)
                 db.commit()
-                print(" Default SchedulerConfig row (id=1) initialized!")
             else:
-                print(" Default SchedulerConfig present and ready.")
+                if "isSelectedEnd" in (config.email_body or "") or "Our platform automates B2B" in (config.email_body or ""):
+                    config.email_body = ""
+                    config.email_subject = ""
+                    db.commit()
+                print(" Existing SchedulerConfig preserved and ready.")
     except Exception as e:
         print(f" Error during database initialization: {e}")
 

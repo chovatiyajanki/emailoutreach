@@ -1,6 +1,19 @@
+import sys
 from contextlib import asynccontextmanager
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
+
+# Ensure UTF-8 output on Windows consoles to prevent cp1252 charmap encoding errors
+if hasattr(sys.stdout, "reconfigure"):
+    try:
+        sys.stdout.reconfigure(encoding="utf-8", errors="replace")
+    except Exception:
+        pass
+if hasattr(sys.stderr, "reconfigure"):
+    try:
+        sys.stderr.reconfigure(encoding="utf-8", errors="replace")
+    except Exception:
+        pass
 
 from .api.scheduler import router as scheduler_router
 from .database import Base, engine, SessionLocal
@@ -11,9 +24,9 @@ from .scheduler_worker import start_worker, stop_worker
 def init_database_tables():
     """Ensures all PostgreSQL tables and default config are created on startup."""
     try:
-        print(" Checking database connection and initializing tables...")
+        print("[Database] Checking database connection and initializing tables...")
         Base.metadata.create_all(bind=engine)
-        print(" Database tables verified/created in PostgreSQL!")
+        print("[Database] Database tables verified/created in PostgreSQL!")
 
         with SessionLocal() as db:
             config = db.query(SchedulerConfig).filter(SchedulerConfig.id == 1).first()
@@ -39,9 +52,9 @@ def init_database_tables():
                     config.email_body = ""
                     config.email_subject = ""
                     db.commit()
-                print(" Existing SchedulerConfig preserved and ready.")
+                print("[Database] Existing SchedulerConfig preserved and ready.")
     except Exception as e:
-        print(f" Error during database initialization: {e}")
+        print(f"[Database] Error during database initialization: {e}")
 
 
 @asynccontextmanager

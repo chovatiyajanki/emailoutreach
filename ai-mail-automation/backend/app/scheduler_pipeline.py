@@ -517,7 +517,14 @@ def run_scheduler_cycle(
     def log(msg: str):
         timestamp = datetime.now().strftime("%H:%M:%S")
         log_entries.append(f"[{timestamp}] {msg}")
-        print(f"[{timestamp}] {msg}")
+        try:
+            print(f"[{timestamp}] {msg}")
+        except Exception:
+            try:
+                clean_txt = str(msg).encode("ascii", "replace").decode("ascii")
+                print(f"[{timestamp}] {clean_txt}")
+            except Exception:
+                pass
 
     # Campaign operational parameters
     query_str = target_campaign.search_query or config.search_query or "B2B Software and Tech Companies"
@@ -549,7 +556,7 @@ def run_scheduler_cycle(
     # =========================================================================
     # STEP 1: SCRAPE THE COMPANIES MAIL ACCOUNTS (1 PER COMPANY GUARANTEE)
     # =========================================================================
-    log("▶ STEP 1: Scraping real company mail accounts from verified live web targets...")
+    log("[STEP 1] Scraping real company mail accounts from verified live web targets...")
 
     # Retrieve all historically contacted companies to prevent duplicate outreach
     contacted_emails, contacted_domains, contacted_names = get_already_contacted_companies(db)
@@ -609,7 +616,7 @@ def run_scheduler_cycle(
     # =========================================================================
     # STEP 2: FIND HOW MANY MAIL ACCOUNTS ARE SCRAPED & READY
     # =========================================================================
-    log("▶ STEP 2: Auditing how many mail accounts are scraped & ready in PostgreSQL...")
+    log("[STEP 2] Auditing how many mail accounts are scraped & ready in PostgreSQL...")
     total_scraped_accounts = db.query(CompanyMailAccount).count()
     ready_accounts = db.query(CompanyMailAccount).filter(CompanyMailAccount.status == "email_found").count()
     current_run.found_count = scraped_count
@@ -619,7 +626,7 @@ def run_scheduler_cycle(
     # =========================================================================
     # STEP 3: SEND MAILS TO THAT ACCOUNTS (STRICTLY 1 MAIL PER COMPANY)
     # =========================================================================
-    log("▶ STEP 3: Dispatching outreach emails (Strict Rule: Send only 1 mail per company)...")
+    log("[STEP 3] Dispatching outreach emails (Strict Rule: Send only 1 mail per company)...")
 
     # Reload fresh contacted sets from database
     contacted_emails, contacted_domains, contacted_names = get_already_contacted_companies(db)
@@ -649,13 +656,13 @@ def run_scheduler_cycle(
             contacted_emails, contacted_domains, contacted_names
         ):
             acc.status = "already_contacted"
-            log(f"  ⏭️ Skipping {acc.company_name} ({acc_email}): Company was already sent an outreach mail.")
+            log(f"  -- Skipping {acc.company_name} ({acc_email}): Company was already sent an outreach mail.")
             continue
 
         # 2. Does another account in THIS BATCH belong to the same company?
         if (acc_dom and acc_dom in seen_batch_domains) or (acc_norm and acc_norm in seen_batch_names):
             acc.status = "duplicate_skipped"
-            log(f"  ⏭️ Skipping duplicate account in batch: {acc.company_name} ({acc_dom}).")
+            log(f"  -- Skipping duplicate account in batch: {acc.company_name} ({acc_dom}).")
             continue
 
         # Safe to contact!
@@ -833,7 +840,7 @@ def run_scheduler_cycle(
     # =========================================================================
     # STEP 4: FIND THE UNDELIVERED MAILS
     # =========================================================================
-    log("▶ STEP 4: Scanning for undelivered / bounced emails...")
+    log("[STEP 4] Scanning for undelivered / bounced emails...")
 
     # Check for delivery failure / bounce if no blocked items found yet
     if sent_records and not undelivered_records and random.random() < 0.6:
@@ -875,7 +882,7 @@ def run_scheduler_cycle(
     # =========================================================================
     # STEP 5: FIND SENDED MAILS REPLIES (ARE THERE OR NOT)
     # =========================================================================
-    log("▶ STEP 5: Checking if sended mails have received replies...")
+    log("[STEP 5] Checking if sended mails have received replies...")
     replies_found = []
     sender_email = (config.smtp_username if config and config.smtp_username else None) or "unconfigured@local"
     recipient_salutation = (config.sender_name.split()[0] if config and config.sender_name else "there")

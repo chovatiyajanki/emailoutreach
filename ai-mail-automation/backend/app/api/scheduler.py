@@ -1155,7 +1155,7 @@ def test_smtp_connection(payload: SmtpTestRequest):
             if imap_host_test:
                 with imaplib.IMAP4_SSL(imap_host_test, 993, timeout=5) as imap_server:
                     imap_server.login(user, pwd)
-                    imap_status_msg = f" • Verified inbound IMAP on {imap_host_test}:993 (ready to receive prospect replies)."
+                    imap_status_msg = f" - Verified inbound IMAP on {imap_host_test}:993 (ready to receive prospect replies)."
         except Exception as e:
             print(f"IMAP handshake note: {e}")
 

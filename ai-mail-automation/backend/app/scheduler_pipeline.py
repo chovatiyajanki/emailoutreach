@@ -52,14 +52,16 @@ def generate_ai_personalized_email(
     sender_name: str,
 ) -> Tuple[str, str, bool]:
     """
-    Uses Groq LLM (e.g., openai/gpt-oss-120b) to generate a personalized,
+    Uses Groq or Gemini LLM to generate a personalized,
     high-converting B2B cold outreach email tailored to the prospect's company & industry.
-    Falls back gracefully to template replacement if Groq is unavailable or errors out.
+    Falls back gracefully to template replacement if AI is unavailable or errors out.
     """
-    api_key = settings.GROQ_API_KEY or os.getenv("GROQ_API_KEY", "")
-    model = settings.GROQ_MODEL or os.getenv("GROQ_MODEL", "openai/gpt-oss-120b")
+    groq_key = settings.GROQ_API_KEY or os.getenv("GROQ_API_KEY", "")
+    gemini_key = getattr(settings, "GEMINI_API_KEY", "") or os.getenv("GEMINI_API_KEY", "")
+    groq_model = settings.GROQ_MODEL or os.getenv("GROQ_MODEL", "openai/gpt-oss-120b")
+    gemini_model = getattr(settings, "GEMINI_MODEL", "") or os.getenv("GEMINI_MODEL", "gemini-flash-latest")
 
-    if not api_key:
+    if not groq_key and not gemini_key:
         return base_subject, base_body, False
 
     prompt = f"""You are a high-performing B2B cold email copywriter.
@@ -80,64 +82,83 @@ Subject: <compelling 4-7 word subject line>
 Body:
 <clean email body ending with {sender_name}>
 """
-    try:
-        url = "https://api.groq.com/openai/v1/chat/completions"
-        headers = {
-            "Authorization": f"Bearer {api_key}",
-            "Content-Type": "application/json",
-            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AI-Mail-Automation/1.0",
-        }
-        data = {
-            "model": model,
-            "messages": [{"role": "user", "content": prompt}],
-            "temperature": 0.6,
-            "max_tokens": 800,
-        }
-        req = urllib.request.Request(url, data=json.dumps(data).encode("utf-8"), headers=headers)
-        with urllib.request.urlopen(req, timeout=12) as response:
-            res = json.loads(response.read().decode("utf-8"))
-            content = res.get("choices", [{}])[0].get("message", {}).get("content", "").strip()
 
-            if content:
-                # Normalize unicode quotes, hyphens, and whitespace
-                cleaned = (
-                    content.replace("\u2011", "-")
-                    .replace("\u2010", "-")
-                    .replace("\u2013", "-")
-                    .replace("\u2014", "-")
-                    .replace("\u2018", "'")
-                    .replace("\u2019", "'")
-                    .replace("\u201c", '"')
-                    .replace("\u201d", '"')
-                    .replace("\u202f", " ")
-                    .replace("\u00a0", " ")
-                )
+    raw_content = ""
 
-                subject_match = re.search(r"^Subject:\s*(.+)$", cleaned, re.MULTILINE | re.IGNORECASE)
-                body_match = re.search(r"^Body:\s*(.+)$", cleaned, re.MULTILINE | re.IGNORECASE | re.DOTALL)
+    # 1. Try Groq if configured
+    if groq_key:
+        try:
+            url = "https://api.groq.com/openai/v1/chat/completions"
+            headers = {
+                "Authorization": f"Bearer {groq_key}",
+                "Content-Type": "application/json",
+                "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AI-Mail-Automation/1.0",
+            }
+            data = {
+                "model": groq_model,
+                "messages": [{"role": "user", "content": prompt}],
+                "temperature": 0.6,
+                "max_tokens": 800,
+            }
+            req = urllib.request.Request(url, data=json.dumps(data).encode("utf-8"), headers=headers)
+            with urllib.request.urlopen(req, timeout=6) as response:
+                res = json.loads(response.read().decode("utf-8"))
+                raw_content = res.get("choices", [{}])[0].get("message", {}).get("content", "").strip()
+        except Exception:
+            raw_content = ""
 
-                subject = subject_match.group(1).strip() if subject_match else base_subject
+    # 2. Try Gemini if Groq failed or wasn't configured
+    if not raw_content and gemini_key:
+        try:
+            url = f"https://generativelanguage.googleapis.com/v1beta/models/{gemini_model}:generateContent?key={gemini_key}"
+            data = {
+                "contents": [{"parts": [{"text": prompt}]}],
+                "generationConfig": {"temperature": 0.4}
+            }
+            req = urllib.request.Request(url, data=json.dumps(data).encode("utf-8"), headers={"Content-Type": "application/json"})
+            with urllib.request.urlopen(req, timeout=6) as response:
+                res = json.loads(response.read().decode("utf-8"))
+                raw_content = res["candidates"][0]["content"]["parts"][0]["text"].strip()
+        except Exception:
+            raw_content = ""
 
-                if body_match:
-                    body = body_match.group(1).strip()
-                elif subject_match:
-                    body = re.sub(r"^Subject:\s*.+$\n*", "", cleaned, flags=re.MULTILINE | re.IGNORECASE).strip()
-                else:
-                    body = cleaned
+    if raw_content:
+        # Normalize unicode quotes, hyphens, and whitespace
+        cleaned = (
+            raw_content.replace("\u2011", "-")
+            .replace("\u2010", "-")
+            .replace("\u2013", "-")
+            .replace("\u2014", "-")
+            .replace("\u2018", "'")
+            .replace("\u2019", "'")
+            .replace("\u201c", '"')
+            .replace("\u201d", '"')
+            .replace("\u202f", " ")
+            .replace("\u00a0", " ")
+        )
 
-                # Safety replace of placeholders in case model preserved any
-                body = (
-                    body.replace("{{company_name}}", company_name)
-                    .replace("{{website}}", website)
-                    .replace("{{industry}}", industry)
-                    .replace("{{city}}", city)
-                    .replace("{{sender_name}}", sender_name)
-                )
+        subject_match = re.search(r"^Subject:\s*(.+)$", cleaned, re.MULTILINE | re.IGNORECASE)
+        body_match = re.search(r"^Body:\s*(.+)$", cleaned, re.MULTILINE | re.IGNORECASE | re.DOTALL)
 
-                return subject, body, True
-    except Exception:
-        # Gracefully handle API timeout, rate limit, or invalid response
-        pass
+        subject = subject_match.group(1).strip() if subject_match else base_subject
+
+        if body_match:
+            body = body_match.group(1).strip()
+        elif subject_match:
+            body = re.sub(r"^Subject:\s*.+$\n*", "", cleaned, flags=re.MULTILINE | re.IGNORECASE).strip()
+        else:
+            body = cleaned
+
+        # Safety replace of placeholders in case model preserved any
+        body = (
+            body.replace("{{company_name}}", company_name)
+            .replace("{{website}}", website)
+            .replace("{{industry}}", industry)
+            .replace("{{city}}", city)
+            .replace("{{sender_name}}", sender_name)
+        )
+
+        return subject, body, True
 
     return base_subject, base_body, False
 
@@ -806,6 +827,7 @@ def run_scheduler_cycle(
                 detected_at=utc_now(),
                 is_suppressed=True,
                 run_id=current_run.id,
+                user_id=effective_user_id,
             )
             db.add(undelivered_item)
             undelivered_records.append(undelivered_item)
@@ -867,6 +889,7 @@ def run_scheduler_cycle(
             detected_at=utc_now(),
             is_suppressed=True,
             run_id=current_run.id,
+            user_id=effective_user_id,
         )
         db.add(undelivered_item)
         bounce_candidate.status = "bounced"
@@ -923,6 +946,7 @@ def run_scheduler_cycle(
                         detected_at=utc_now(),
                         is_suppressed=True,
                         run_id=current_run.id,
+                        user_id=effective_user_id,
                     )
                     db.add(undeliv)
                     db.add(SuppressionList(email=blocked_target, reason="Google message blocked"))
@@ -1013,6 +1037,7 @@ def run_scheduler_cycle(
                     ai_summary="Actual inbound response received from company prospect.",
                     received_at=utc_now(),
                     run_id=current_run.id,
+                    user_id=effective_user_id,
                 )
                 db.add(reply_obj)
                 replies_found.append(reply_obj)

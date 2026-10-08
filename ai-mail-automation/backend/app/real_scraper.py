@@ -536,6 +536,7 @@ def scrape_real_companies(
     count: int = 5,
     exclude_domains: Optional[Set[str]] = None,
     exclude_names: Optional[Set[str]] = None,
+    limit: Optional[int] = None,
 ) -> List[Dict[str, Any]]:
     """
     Finds real, verified companies strictly matching the search query and city/country location.
@@ -544,6 +545,8 @@ def scrape_real_companies(
     2. Recognizes city / country location filters (e.g. 'IT companies in USA', 'Software in India', 'Dentists in Chicago').
     3. Respects exclude_domains and exclude_names to avoid previously contacted or existing companies.
     """
+    if limit is not None:
+        count = limit
     count = max(1, min(count, 50))
     query_clean = query.strip()
     query_lower = query_clean.lower()

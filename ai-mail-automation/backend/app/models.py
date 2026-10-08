@@ -144,6 +144,7 @@ class UndeliveredMail(Base):
     detected_at = Column(DateTime(timezone=True), default=utc_now, nullable=False)
     is_suppressed = Column(Boolean, default=True, nullable=False)
     run_id = Column(UUID(as_uuid=True), ForeignKey("scheduler_runs.id"), nullable=True)
+    user_id = Column(UUID(as_uuid=True), ForeignKey("users.id", ondelete="SET NULL"), nullable=True, index=True)
 
     sent_mail = relationship("SentMail", back_populates="undelivered")
 
@@ -162,6 +163,7 @@ class MailReply(Base):
     ai_summary = Column(Text, nullable=True)
     received_at = Column(DateTime(timezone=True), default=utc_now, nullable=False)
     run_id = Column(UUID(as_uuid=True), ForeignKey("scheduler_runs.id"), nullable=True)
+    user_id = Column(UUID(as_uuid=True), ForeignKey("users.id", ondelete="SET NULL"), nullable=True, index=True)
 
     sent_mail = relationship("SentMail", back_populates="reply")
 

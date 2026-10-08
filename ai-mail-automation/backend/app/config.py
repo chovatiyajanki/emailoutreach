@@ -18,8 +18,6 @@ class Settings:
         "development",
     )
 
-    JWT_SECRET_KEY = os.getenv("JWT_SECRET_KEY", "")
-
     DATABASE_URL = os.getenv(
         "DATABASE_URL",
     )
@@ -38,6 +36,16 @@ class Settings:
     GROQ_MODEL = os.getenv(
         "GROQ_MODEL",
         "openai/gpt-oss-120b",
+    )
+
+    GEMINI_API_KEY = os.getenv(
+        "GEMINI_API_KEY",
+        "",
+    )
+
+    GEMINI_MODEL = os.getenv(
+        "GEMINI_MODEL",
+        "gemini-flash-latest",
     )
 
     SENDER_EMAIL = os.getenv(

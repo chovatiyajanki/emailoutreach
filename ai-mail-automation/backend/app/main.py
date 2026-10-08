@@ -33,6 +33,8 @@ def init_database_tables():
             conn.execute(text("ALTER TABLE campaigns ADD COLUMN IF NOT EXISTS user_id UUID REFERENCES users(id) ON DELETE SET NULL;"))
             conn.execute(text("ALTER TABLE scheduler_runs ADD COLUMN IF NOT EXISTS user_id UUID REFERENCES users(id) ON DELETE SET NULL;"))
             conn.execute(text("ALTER TABLE sent_mails ADD COLUMN IF NOT EXISTS user_id UUID REFERENCES users(id) ON DELETE SET NULL;"))
+            conn.execute(text("ALTER TABLE undelivered_mails ADD COLUMN IF NOT EXISTS user_id UUID REFERENCES users(id) ON DELETE SET NULL;"))
+            conn.execute(text("ALTER TABLE mail_replies ADD COLUMN IF NOT EXISTS user_id UUID REFERENCES users(id) ON DELETE SET NULL;"))
             conn.commit()
         print("[Database] Database tables and user_id foreign keys verified/created in PostgreSQL!")
 
@@ -99,6 +101,7 @@ app.add_middleware(
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
+    allow_private_network=True,
 )
 
 app.include_router(scheduler_router)

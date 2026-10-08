@@ -16,6 +16,7 @@ if hasattr(sys.stderr, "reconfigure"):
         pass
 
 from .api.scheduler import router as scheduler_router
+from .api.auth import router as auth_router
 from .database import Base, engine, SessionLocal
 from .models import SchedulerConfig
 from .scheduler_worker import start_worker, stop_worker
@@ -24,9 +25,16 @@ from .scheduler_worker import start_worker, stop_worker
 def init_database_tables():
     """Ensures all PostgreSQL tables and default config are created on startup."""
     try:
+        from sqlalchemy import text
         print("[Database] Checking database connection and initializing tables...")
         Base.metadata.create_all(bind=engine)
-        print("[Database] Database tables verified/created in PostgreSQL!")
+        with engine.connect() as conn:
+            conn.execute(text("ALTER TABLE company_mail_accounts ADD COLUMN IF NOT EXISTS user_id UUID REFERENCES users(id) ON DELETE SET NULL;"))
+            conn.execute(text("ALTER TABLE campaigns ADD COLUMN IF NOT EXISTS user_id UUID REFERENCES users(id) ON DELETE SET NULL;"))
+            conn.execute(text("ALTER TABLE scheduler_runs ADD COLUMN IF NOT EXISTS user_id UUID REFERENCES users(id) ON DELETE SET NULL;"))
+            conn.execute(text("ALTER TABLE sent_mails ADD COLUMN IF NOT EXISTS user_id UUID REFERENCES users(id) ON DELETE SET NULL;"))
+            conn.commit()
+        print("[Database] Database tables and user_id foreign keys verified/created in PostgreSQL!")
 
         with SessionLocal() as db:
             config = db.query(SchedulerConfig).filter(SchedulerConfig.id == 1).first()
@@ -79,8 +87,13 @@ app.add_middleware(
     allow_origins=[
         "https://emailoutreach-gamma.vercel.app",
         "http://localhost:5173",
+        "http://localhost:5174",
+        "http://localhost:5175",
         "http://localhost:3000",
         "http://127.0.0.1:5173",
+        "http://127.0.0.1:5174",
+        "http://127.0.0.1:5175",
+        "http://127.0.0.1:3000",
     ],
     allow_origin_regex=r"https://.*\.vercel\.app",
     allow_credentials=True,
@@ -89,6 +102,7 @@ app.add_middleware(
 )
 
 app.include_router(scheduler_router)
+app.include_router(auth_router)
 
 
 @app.get("/")

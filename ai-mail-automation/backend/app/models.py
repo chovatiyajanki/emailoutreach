@@ -40,6 +40,7 @@ class Campaign(Base):
     last_run_at = Column(DateTime(timezone=True), nullable=True)
     created_at = Column(DateTime(timezone=True), default=utc_now, nullable=False)
     updated_at = Column(DateTime(timezone=True), default=utc_now, onupdate=utc_now)
+    user_id = Column(UUID(as_uuid=True), ForeignKey("users.id", ondelete="SET NULL"), nullable=True, index=True)
 
     runs = relationship("SchedulerRun", back_populates="campaign", cascade="all, delete-orphan")
 
@@ -75,6 +76,7 @@ class SchedulerRun(Base):
     run_number = Column(Integer, nullable=False)
     campaign_id = Column(UUID(as_uuid=True), ForeignKey("campaigns.id"), nullable=True)
     campaign_name = Column(String(255), nullable=True)
+    user_id = Column(UUID(as_uuid=True), ForeignKey("users.id", ondelete="SET NULL"), nullable=True, index=True)
     started_at = Column(DateTime(timezone=True), default=utc_now, nullable=False)
     completed_at = Column(DateTime(timezone=True), nullable=True)
     status = Column(String(50), default="running", nullable=False)  # running, completed, failed
@@ -106,6 +108,7 @@ class CompanyMailAccount(Base):
     status = Column(String(50), default="email_found", nullable=False)  # email_found, sent, bounced, replies, replied, blocked_message
     scraped_at = Column(DateTime(timezone=True), default=utc_now, nullable=False)
     run_id = Column(UUID(as_uuid=True), ForeignKey("scheduler_runs.id"), nullable=True)
+    user_id = Column(UUID(as_uuid=True), ForeignKey("users.id", ondelete="SET NULL"), nullable=True, index=True)
 
     sent_mails = relationship("SentMail", back_populates="company_account")
 
@@ -123,6 +126,7 @@ class SentMail(Base):
     delivery_mode = Column(String(50), default="live_smtp", nullable=False)  # live_smtp, simulation
     sent_at = Column(DateTime(timezone=True), default=utc_now, nullable=False)
     run_id = Column(UUID(as_uuid=True), ForeignKey("scheduler_runs.id"), nullable=True)
+    user_id = Column(UUID(as_uuid=True), ForeignKey("users.id", ondelete="SET NULL"), nullable=True, index=True)
 
     company_account = relationship("CompanyMailAccount", back_populates="sent_mails")
     undelivered = relationship("UndeliveredMail", back_populates="sent_mail", uselist=False)
@@ -169,3 +173,15 @@ class SuppressionList(Base):
     email = Column(String(255), unique=True, index=True, nullable=False)
     reason = Column(String(255), default="Undelivered bounce failure", nullable=False)
     added_at = Column(DateTime(timezone=True), default=utc_now, nullable=False)
+
+
+class User(Base):
+    __tablename__ = "users"
+
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    email = Column(String(255), unique=True, index=True, nullable=False)
+    hashed_password = Column(String(255), nullable=False)
+    full_name = Column(String(255), nullable=True)
+    is_active = Column(Boolean, default=True, nullable=False)
+    created_at = Column(DateTime(timezone=True), default=utc_now, nullable=False)
+    updated_at = Column(DateTime(timezone=True), default=utc_now, onupdate=utc_now)

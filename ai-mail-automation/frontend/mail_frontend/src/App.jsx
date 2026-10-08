@@ -1,6 +1,7 @@
 import { useState, useEffect, useRef } from 'react'
 import './App.css'
 import RichTextEditor, { ensureHtmlContent } from './RichTextEditor'
+import AuthView from './AuthView'
 
 const MAIL_PRESETS = [
   {
@@ -48,11 +49,104 @@ function formatLocalDateTime(val, includeSeconds = false) {
 }
 
 export default function App() {
+  // Authentication state (JWT token and profile)
+  const [authToken, setAuthToken] = useState(() => {
+    try {
+      return localStorage.getItem('auth_token') || ''
+    } catch {
+      return ''
+    }
+  })
+  const [currentUser, setCurrentUser] = useState(() => {
+    try {
+      const saved = localStorage.getItem('auth_user')
+      return saved ? JSON.parse(saved) : null
+    } catch {
+      return null
+    }
+  })
+  const [isAuthLoading, setIsAuthLoading] = useState(true)
+
+  // Verify stored session token on initial mount
+  useEffect(() => {
+    const verifySession = async () => {
+      const token = localStorage.getItem('auth_token')
+      if (!token) {
+        setAuthToken('')
+        setCurrentUser(null)
+        setIsAuthLoading(false)
+        return
+      }
+
+      try {
+        const res = await fetch(`${API_BASE}/api/auth/me`, {
+          headers: { Authorization: `Bearer ${token}` },
+        })
+        if (res.ok) {
+          const data = await res.json()
+          if (data.user) {
+            setCurrentUser(data.user)
+            localStorage.setItem('auth_user', JSON.stringify(data.user))
+          }
+        } else if (res.status === 401) {
+          localStorage.removeItem('auth_token')
+          localStorage.removeItem('auth_user')
+          setAuthToken('')
+          setCurrentUser(null)
+        }
+      } catch {
+        // Offline or connection error - preserve cached user session
+      } finally {
+        setIsAuthLoading(false)
+      }
+    }
+
+    verifySession()
+  }, [])
+
+  const handleAuthSuccess = (token, user) => {
+    try {
+      localStorage.setItem('auth_token', token)
+      localStorage.setItem('auth_user', JSON.stringify(user))
+    } catch {
+      // Storage error
+    }
+    setAuthToken(token)
+    setCurrentUser(user)
+    setFeedbackMsg(`Welcome back, ${user.full_name || user.email}!`)
+    fetchAllData()
+  }
+
+  const handleLogout = () => {
+    try {
+      localStorage.removeItem('auth_token')
+      localStorage.removeItem('auth_user')
+    } catch {
+      // Storage error
+    }
+    setAuthToken('')
+    setCurrentUser(null)
+  }
+
+  // Central authenticated fetch wrapper that attaches Bearer token to all requests
+  const authFetch = (url, options = {}) => {
+    const headers = {
+      ...(options.headers || {}),
+      ...(authToken ? { Authorization: `Bearer ${authToken}` } : {}),
+    }
+    return fetch(url, { ...options, headers })
+  }
+
   // Current active data tab: 'accounts' | 'sent' | 'undelivered' | 'replies' | 'runs'
   const [activeTab, setActiveTab] = useState('accounts')
 
   // Search filter inside tables
   const [searchQuery, setSearchQuery] = useState('')
+
+  // Scraped Accounts filtering: 'scraped_only' (default) | 'all'
+  const [scrapedViewMode, setScrapedViewMode] = useState('scraped_only')
+  // Target query/campaign filter: 'all' | 'current_query' | campaignId
+  const [scrapedTargetFilter, setScrapedTargetFilter] = useState('all')
 
   // Detail viewer modal
   const [selectedRecord, setSelectedRecord] = useState(null)
@@ -214,19 +308,19 @@ export default function App() {
 
   // Fetch status and all data from FastAPI
   const fetchAllData = async () => {
-    if (isFetchingRef.current) return
+    if (isFetchingRef.current || !authToken) return
     isFetchingRef.current = true
     try {
       const [resStatus, resAccounts, resSent, resBounced, resBlocked, resUndelivered, resReplies, resRuns, resCampaigns] = await Promise.all([
-        fetch(`${API_BASE}/api/scheduler/status`),
-        fetch(`${API_BASE}/api/data/accounts`),
-        fetch(`${API_BASE}/api/data/sent`),
-        fetch(`${API_BASE}/api/data/bounced`),
-        fetch(`${API_BASE}/api/data/blocked`),
-        fetch(`${API_BASE}/api/data/undelivered`),
-        fetch(`${API_BASE}/api/data/replies`),
-        fetch(`${API_BASE}/api/scheduler/runs`),
-        fetch(`${API_BASE}/api/campaigns`),
+        authFetch(`${API_BASE}/api/scheduler/status`),
+        authFetch(`${API_BASE}/api/data/accounts`),
+        authFetch(`${API_BASE}/api/data/sent`),
+        authFetch(`${API_BASE}/api/data/bounced`),
+        authFetch(`${API_BASE}/api/data/blocked`),
+        authFetch(`${API_BASE}/api/data/undelivered`),
+        authFetch(`${API_BASE}/api/data/replies`),
+        authFetch(`${API_BASE}/api/scheduler/runs`),
+        authFetch(`${API_BASE}/api/campaigns`),
       ])
 
       if (resStatus.ok) {
@@ -258,8 +352,9 @@ export default function App() {
 
   // Fetch SMTP settings from backend
   const fetchSmtpSettings = async () => {
+    if (!authToken) return
     try {
-      const res = await fetch(`${API_BASE}/api/smtp/settings`)
+      const res = await authFetch(`${API_BASE}/api/smtp/settings`)
       if (res.ok) {
         const data = await res.json()
         if (data.smtp_host) setSmtpHost(data.smtp_host)
@@ -274,11 +369,12 @@ export default function App() {
   }
 
   useEffect(() => {
+    if (!authToken) return
     fetchAllData()
     fetchSmtpSettings()
     const timer = setInterval(fetchAllData, 5000)
     return () => clearInterval(timer)
-  }, [])
+  }, [authToken])
 
   // Start or Stop the automated scheduler (Instant 1-Click Response)
   const handleToggleScheduler = async () => {
@@ -287,7 +383,7 @@ export default function App() {
         // Optimistic UI update on start
         setStatus((prev) => ({ ...prev, is_running: true }))
         setFeedbackMsg(`Starting autopilot for "${campaignName}"...`)
-        await fetch(`${API_BASE}/api/scheduler/config`, {
+        await authFetch(`${API_BASE}/api/scheduler/config`, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({
@@ -300,7 +396,7 @@ export default function App() {
             email_body: campaignBody,
           }),
         })
-        const res = await fetch(`${API_BASE}/api/scheduler/start`, { method: 'POST' })
+        const res = await authFetch(`${API_BASE}/api/scheduler/start`, { method: 'POST' })
         if (res.ok) {
           await fetchAllData()
           const intvVal = Number(editInterval) || 60
@@ -313,7 +409,7 @@ export default function App() {
         // INSTANT 1-CLICK OPTIMISTIC PAUSE: Immediately change button to idle without waiting
         setStatus((prev) => ({ ...prev, is_running: false }))
         setFeedbackMsg('Autopilot paused.')
-        const res = await fetch(`${API_BASE}/api/scheduler/stop`, { method: 'POST' })
+        const res = await authFetch(`${API_BASE}/api/scheduler/stop`, { method: 'POST' })
         if (res.ok) {
           await fetchAllData()
         } else {
@@ -331,7 +427,7 @@ export default function App() {
     setIsTriggering(true)
     setFeedbackMsg(`Executing cycle for "${editQuery || 'All Companies'}" (Scrape: ${editScrapeBatch || 5}, Send: ${editSendBatch || 5})...`)
     try {
-      const res = await fetch(`${API_BASE}/api/scheduler/trigger`, {
+      const res = await authFetch(`${API_BASE}/api/scheduler/trigger`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
@@ -363,7 +459,7 @@ export default function App() {
     setIsCampaignModalOpen(false)
     setFeedbackMsg(`Creating and launching campaign "${campaignName || 'Campaign'}" for "${editQuery || 'All Companies'}"...`)
     try {
-      const res = await fetch(`${API_BASE}/api/campaigns/create`, {
+      const res = await authFetch(`${API_BASE}/api/campaigns/create`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
@@ -396,7 +492,7 @@ export default function App() {
   const handleSaveAndStartScheduler = async () => {
     setIsCampaignModalOpen(false)
     try {
-      const res = await fetch(`${API_BASE}/api/campaigns/create`, {
+      const res = await authFetch(`${API_BASE}/api/campaigns/create`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
@@ -426,7 +522,7 @@ export default function App() {
   const handleSaveCampaignOnly = async () => {
     setIsCampaignModalOpen(false)
     try {
-      const res = await fetch(`${API_BASE}/api/campaigns/create`, {
+      const res = await authFetch(`${API_BASE}/api/campaigns/create`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
@@ -454,7 +550,7 @@ export default function App() {
   // Activate campaign in scheduler
   const handleActivateCampaign = async (campaignId, cName) => {
     try {
-      const res = await fetch(`${API_BASE}/api/campaigns/${campaignId}/activate`, {
+      const res = await authFetch(`${API_BASE}/api/campaigns/${campaignId}/activate`, {
         method: 'POST',
       })
       if (res.ok) {
@@ -471,7 +567,7 @@ export default function App() {
     setIsTriggering(true)
     setFeedbackMsg(`Executing cycle for campaign "${cName}"...`)
     try {
-      const res = await fetch(`${API_BASE}/api/campaigns/${campaignId}/run`, {
+      const res = await authFetch(`${API_BASE}/api/campaigns/${campaignId}/run`, {
         method: 'POST',
       })
       if (res.ok) {
@@ -493,7 +589,7 @@ export default function App() {
       return
     }
     try {
-      const res = await fetch(`${API_BASE}/api/campaigns/${campaignId}`, {
+      const res = await authFetch(`${API_BASE}/api/campaigns/${campaignId}`, {
         method: 'DELETE',
       })
       if (res.ok) {
@@ -552,7 +648,7 @@ export default function App() {
 
     setIsSavingTemplate(true)
     try {
-      const res = await fetch(`${API_BASE}/api/template/save`, {
+      const res = await authFetch(`${API_BASE}/api/template/save`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
@@ -603,7 +699,7 @@ export default function App() {
     setIsEnhancing(true)
     setFeedbackMsg('AI is polishing and enhancing your email template...')
     try {
-      const res = await fetch(`${API_BASE}/api/template/enhance`, {
+      const res = await authFetch(`${API_BASE}/api/template/enhance`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
@@ -639,7 +735,7 @@ export default function App() {
     setTestMailResult(null)
 
     try {
-      const res = await fetch(`${API_BASE}/api/campaigns/test-send`, {
+      const res = await authFetch(`${API_BASE}/api/campaigns/test-send`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
@@ -677,7 +773,7 @@ export default function App() {
       return
     }
     try {
-      const res = await fetch(`${API_BASE}/api/reset`, { method: 'POST' })
+      const res = await authFetch(`${API_BASE}/api/reset`, { method: 'POST' })
       if (res.ok) {
         await fetchAllData()
         setFeedbackMsg('All tables reset cleanly. Fresh start initialized.')
@@ -693,7 +789,7 @@ export default function App() {
     setSmtpTesting(true)
     setSmtpTestResult(null)
     try {
-      const res = await fetch(`${API_BASE}/api/smtp/test`, {
+      const res = await authFetch(`${API_BASE}/api/smtp/test`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
@@ -717,7 +813,7 @@ export default function App() {
   const handleSaveSmtp = async () => {
     setSmtpSaving(true)
     try {
-      const res = await fetch(`${API_BASE}/api/smtp/settings`, {
+      const res = await authFetch(`${API_BASE}/api/smtp/settings`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
@@ -750,7 +846,7 @@ export default function App() {
       return
     }
     try {
-      const res = await fetch(`${API_BASE}/api/smtp/clear`, { method: 'POST' })
+      const res = await authFetch(`${API_BASE}/api/smtp/clear`, { method: 'POST' })
       if (res.ok) {
         setSmtpUsername('')
         setSmtpPassword('')
@@ -848,6 +944,50 @@ export default function App() {
           String(u.bounce_reason || '').toLowerCase().includes('blocked')
       )
 
+  // 4. Scraped Leads: ONLY uncontacted freshly scraped leads in queue (strictly exclude sent, bounced, blocked)
+  const scrapedOnlyAccounts = accounts.filter(
+    (a) => a.status === 'email_found' || a.status === 'scraped'
+  )
+
+  // 5. Effective Scraped Accounts respecting status filter and target query/campaign filter
+  const effectiveAccounts = (() => {
+    let list = scrapedViewMode === 'scraped_only' ? scrapedOnlyAccounts : accounts
+
+    if (scrapedTargetFilter === 'current_query' && editQuery) {
+      const qWords = editQuery.toLowerCase().split(/\s+/).filter(Boolean)
+      list = list.filter((a) => {
+        const text = `${a.company_name} ${a.industry} ${a.city} ${a.website} ${a.email}`.toLowerCase()
+        return qWords.some((w) => text.includes(w))
+      })
+    } else if (scrapedTargetFilter && scrapedTargetFilter !== 'all') {
+      const targetCamp = campaigns.find((c) => String(c.id) === String(scrapedTargetFilter))
+      if (targetCamp && targetCamp.search_query) {
+        const qWords = targetCamp.search_query.toLowerCase().split(/\s+/).filter(Boolean)
+        list = list.filter((a) => {
+          const text = `${a.company_name} ${a.industry} ${a.city} ${a.website} ${a.email}`.toLowerCase()
+          return qWords.some((w) => text.includes(w))
+        })
+      }
+    }
+
+    return list
+  })()
+
+  if (isAuthLoading) {
+    return (
+      <div style={{ minHeight: '100vh', display: 'flex', alignItems: 'center', justifyContent: 'center', background: '#0a0d14', color: '#94a3b8', fontFamily: 'var(--font-family-base)' }}>
+        <div style={{ textAlign: 'center' }}>
+          <div style={{ width: '40px', height: '40px', border: '3px solid rgba(59, 130, 246, 0.2)', borderTopColor: '#3b82f6', borderRadius: '50%', animation: 'spin 1s linear infinite', margin: '0 auto 16px' }} />
+          <p style={{ margin: 0, fontSize: '14px', letterSpacing: '0.02em' }}>Authenticating session...</p>
+        </div>
+      </div>
+    )
+  }
+
+  if (!authToken) {
+    return <AuthView onAuthSuccess={handleAuthSuccess} apiBase={API_BASE} />
+  }
+
   return (
     <div className="scheduler-app">
       {/* ====================================================================
@@ -855,9 +995,9 @@ export default function App() {
           ==================================================================== */}
       <header className="top-navbar">
         <div className="nav-brand">
-          <div className="brand-symbol">OS</div>
+          <div className="brand-symbol">EOS</div>
           <div className="brand-details">
-            <span className="brand-heading">Outreach Scheduler</span>
+            <span className="brand-heading">Email Outreach Scraper</span>
             <span className="brand-subtext">Automated B2B Lead Discovery &amp; Email Dispatch</span>
           </div>
         </div>
@@ -927,6 +1067,24 @@ export default function App() {
           >
             Fresh Start
           </button>
+
+          {currentUser && (
+            <div className="nav-user-profile">
+              <div className="user-avatar-badge" title={currentUser.email}>
+                {(currentUser.full_name || currentUser.email || 'U').charAt(0).toUpperCase()}
+              </div>
+              <div className="user-info-text">
+                <span className="user-name-label">{currentUser.full_name || currentUser.email.split('@')[0]}</span>
+              </div>
+              <button
+                className="btn-logout"
+                onClick={handleLogout}
+                title="Sign out of your account"
+              >
+                Sign Out
+              </button>
+            </div>
+          )}
         </div>
       </header>
 
@@ -1165,7 +1323,9 @@ export default function App() {
                 onClick={() => handleSelectTab('accounts')}
               >
                 <span>Scraped Accounts</span>
-                <span className="tab-badge">{accounts.length}</span>
+                <span className="tab-badge" title={`${scrapedOnlyAccounts.length} uncontacted scraped leads (${accounts.length} total)`}>
+                  {scrapedOnlyAccounts.length}
+                </span>
               </button>
 
               <button
@@ -1406,35 +1566,103 @@ export default function App() {
                     </button>
                   </div>
                 </div>
-              ) : filterRows(accounts).length === 0 ? (
-                renderNoSearchResults(accounts.length)
+              ) : effectiveAccounts.length === 0 ? (
+                <div className="no-data-box">
+                  <div className="no-data-icon"></div>
+                  <h4 className="no-data-title">No Scraped Leads Match Filter</h4>
+                  <p className="no-data-hint">
+                    {scrapedViewMode === 'scraped_only'
+                      ? 'All scraped accounts for this target have already been emailed or processed! Click "All Historical" below or scrape fresh leads.'
+                      : 'No accounts match the selected target or search criteria.'}
+                  </p>
+                  <div style={{ display: 'flex', gap: '10px', marginTop: '14px', justifyContent: 'center' }}>
+                    <button
+                      className="nav-btn"
+                      onClick={() => { setScrapedTargetFilter('all'); setScrapedViewMode('scraped_only'); }}
+                    >
+                      Reset Filter
+                    </button>
+                    {scrapedViewMode === 'scraped_only' && (
+                      <button
+                        className="nav-btn"
+                        onClick={() => setScrapedViewMode('all')}
+                      >
+                        View All Records ({accounts.length})
+                      </button>
+                    )}
+                    <button
+                      className="btn-trigger-now"
+                      disabled={isTriggering}
+                      onClick={handleTriggerNow}
+                    >
+                       Scrape Fresh Leads
+                    </button>
+                  </div>
+                </div>
+              ) : filterRows(effectiveAccounts).length === 0 ? (
+                renderNoSearchResults(effectiveAccounts.length)
               ) : (
                 <div>
                   <div className="accounts-table-toolbar">
-                    <div className="accounts-toolbar-info">
-                      <span>Total Accounts: <strong>{accounts.length}</strong></span>
-                      <span>•</span>
-                      <span>Ready for Outreach: <strong style={{ color: '#38bdf8' }}>{accounts.filter(a => a.status === 'email_found').length}</strong></span>
-                      <span>•</span>
-                      <span>Contacted: <strong style={{ color: '#34d399' }}>{accounts.filter(a => a.status === 'sent' || a.status === 'replied' || a.status === 'replies').length}</strong></span>
-                      {accounts.some(a => a.status === 'bounced') && (
-                        <>
-                          <span>•</span>
-                          <span>Bounced: <strong style={{ color: '#fbbf24' }}>{accounts.filter(a => a.status === 'bounced').length}</strong></span>
-                        </>
-                      )}
-                      {accounts.some(a => a.status === 'blocked_message' || a.status === 'blocked message') && (
-                        <>
-                          <span>•</span>
-                          <span>Blocked: <strong style={{ color: '#f87171' }}>{accounts.filter(a => a.status === 'blocked_message' || a.status === 'blocked message').length}</strong></span>
-                        </>
-                      )}
-                      {accounts.some(a => a.status === 'replies' || a.status === 'replied') && (
-                        <>
-                          <span>•</span>
-                          <span>Replies: <strong style={{ color: '#a78bfa' }}>{accounts.filter(a => a.status === 'replies' || a.status === 'replied').length}</strong></span>
-                        </>
-                      )}
+                    <div className="accounts-toolbar-info" style={{ display: 'flex', alignItems: 'center', gap: '12px', flexWrap: 'wrap' }}>
+                      <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
+                        <span style={{ fontSize: '12px', color: '#94a3b8', fontWeight: 600 }}>Target:</span>
+                        <select
+                          className="quick-preset-select"
+                          style={{ background: '#0f172a', border: '1px solid #334155', color: '#f8fafc', padding: '4px 8px', borderRadius: '6px', fontSize: '12px', cursor: 'pointer' }}
+                          value={scrapedTargetFilter}
+                          onChange={(e) => setScrapedTargetFilter(e.target.value)}
+                        >
+                          <option value="all">All Targets ({effectiveAccounts.length})</option>
+                          {editQuery && <option value="current_query">Current Target: "{editQuery}"</option>}
+                          {campaigns.map((c) => (
+                            <option key={c.id} value={c.id}>Campaign: {c.name || c.search_query}</option>
+                          ))}
+                        </select>
+                      </div>
+
+                      <div className="segmented-toggle" style={{ display: 'inline-flex', background: '#0f172a', borderRadius: '6px', padding: '2px', border: '1px solid #334155' }}>
+                        <button
+                          type="button"
+                          className={`btn-subtab ${scrapedViewMode === 'scraped_only' ? 'active' : ''}`}
+                          style={{
+                            background: scrapedViewMode === 'scraped_only' ? '#2563eb' : 'transparent',
+                            color: scrapedViewMode === 'scraped_only' ? '#ffffff' : '#94a3b8',
+                            border: 'none',
+                            padding: '3px 10px',
+                            borderRadius: '4px',
+                            fontSize: '11.5px',
+                            fontWeight: 600,
+                            cursor: 'pointer'
+                          }}
+                          onClick={() => setScrapedViewMode('scraped_only')}
+                          title="Shows only uncontacted freshly scraped leads in queue"
+                        >
+                          Only Scraped Leads ({scrapedOnlyAccounts.length})
+                        </button>
+                        <button
+                          type="button"
+                          className={`btn-subtab ${scrapedViewMode === 'all' ? 'active' : ''}`}
+                          style={{
+                            background: scrapedViewMode === 'all' ? '#2563eb' : 'transparent',
+                            color: scrapedViewMode === 'all' ? '#ffffff' : '#94a3b8',
+                            border: 'none',
+                            padding: '3px 10px',
+                            borderRadius: '4px',
+                            fontSize: '11.5px',
+                            fontWeight: 600,
+                            cursor: 'pointer'
+                          }}
+                          onClick={() => setScrapedViewMode('all')}
+                          title="Shows all historical accounts including sent, bounced, and blocked"
+                        >
+                          All Historical ({accounts.length})
+                        </button>
+                      </div>
+
+                      <span style={{ fontSize: '12px', color: '#64748b' }}>
+                        Showing <strong>{filterRows(effectiveAccounts).length}</strong> lead(s)
+                      </span>
                     </div>
                   </div>
 
@@ -1454,7 +1682,7 @@ export default function App() {
                       </tr>
                     </thead>
                     <tbody>
-                      {filterRows(accounts).map((acc, idx) => (
+                      {filterRows(effectiveAccounts).map((acc, idx) => (
                         <tr key={acc.id} onClick={() => setSelectedRecord({ type: 'account', data: acc })}>
                           <td className="td-num">{idx + 1}</td>
                           <td style={{ fontWeight: 600 }}>{acc.company_name}</td>

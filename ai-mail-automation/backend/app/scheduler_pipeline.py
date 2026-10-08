@@ -468,6 +468,7 @@ def run_scheduler_cycle(
     db: Session,
     run_id: Optional[uuid.UUID] = None,
     campaign_id: Optional[uuid.UUID] = None,
+    user_id: Optional[uuid.UUID] = None,
 ) -> Dict[str, Any]:
     """
     Executes the 5-step scheduler workflow for the designated campaign:
@@ -503,12 +504,15 @@ def run_scheduler_cycle(
                 interval_seconds=config.interval_seconds or 60,
                 email_subject=config.email_subject or "Partnership & Automation Opportunities for {{company_name}}",
                 email_body=config.email_body or "Hi {{company_name}} Team,\n\nI came across {{website}} and noticed your work in {{industry}}. Our platform automates B2B email workflows and communication pipelines.\n\nWould you be open to a 10-minute demo next week?\n\nBest regards,\n{{sender_name}}",
-                status="active"
+                status="active",
+                user_id=user_id,
             )
             db.add(target_campaign)
             db.commit()
         config.active_campaign_id = target_campaign.id
         db.commit()
+
+    effective_user_id = user_id or (target_campaign.user_id if target_campaign else None)
 
     run_number = config.total_runs + 1
     started_at = utc_now()
@@ -537,6 +541,7 @@ def run_scheduler_cycle(
         run_number=run_number,
         campaign_id=target_campaign.id,
         campaign_name=target_campaign.name,
+        user_id=effective_user_id,
         started_at=started_at,
         status="running",
         query_used=query_str,
@@ -599,6 +604,7 @@ def run_scheduler_cycle(
             verification_score=item["verification_score"],
             status="email_found",
             run_id=current_run.id,
+            user_id=effective_user_id,
         )
         db.add(account)
         scraped_accounts_batch.append(account)
@@ -617,8 +623,12 @@ def run_scheduler_cycle(
     # STEP 2: FIND HOW MANY MAIL ACCOUNTS ARE SCRAPED & READY
     # =========================================================================
     log("[STEP 2] Auditing how many mail accounts are scraped & ready in PostgreSQL...")
-    total_scraped_accounts = db.query(CompanyMailAccount).count()
-    ready_accounts = db.query(CompanyMailAccount).filter(CompanyMailAccount.status == "email_found").count()
+    if effective_user_id:
+        total_scraped_accounts = db.query(CompanyMailAccount).filter(CompanyMailAccount.user_id == effective_user_id).count()
+        ready_accounts = db.query(CompanyMailAccount).filter(CompanyMailAccount.user_id == effective_user_id, CompanyMailAccount.status == "email_found").count()
+    else:
+        total_scraped_accounts = db.query(CompanyMailAccount).count()
+        ready_accounts = db.query(CompanyMailAccount).filter(CompanyMailAccount.status == "email_found").count()
     current_run.found_count = scraped_count
     log(f"Step 2 Complete: Found {scraped_count} new unique company accounts in this cycle.")
     log(f"  Total Accounts in Database: {total_scraped_accounts} | Available for Outreach: {ready_accounts}")
@@ -631,9 +641,11 @@ def run_scheduler_cycle(
     # Reload fresh contacted sets from database
     contacted_emails, contacted_domains, contacted_names = get_already_contacted_companies(db)
 
+    cand_q = db.query(CompanyMailAccount).filter(CompanyMailAccount.status == "email_found")
+    if effective_user_id:
+        cand_q = cand_q.filter(CompanyMailAccount.user_id == effective_user_id)
     candidate_accounts = (
-        db.query(CompanyMailAccount)
-        .filter(CompanyMailAccount.status == "email_found")
+        cand_q
         .order_by(
             desc(CompanyMailAccount.run_id == current_run.id),
             desc(CompanyMailAccount.scraped_at)
@@ -705,6 +717,7 @@ def run_scheduler_cycle(
                 verification_score=item["verification_score"],
                 status="email_found",
                 run_id=current_run.id,
+                user_id=effective_user_id,
             )
             db.add(new_acc)
             accounts_to_contact.append(new_acc)
@@ -818,6 +831,7 @@ def run_scheduler_cycle(
             delivery_mode=delivery_mode,
             sent_at=utc_now(),
             run_id=current_run.id,
+            user_id=effective_user_id,
         )
         db.add(sent_item)
         if is_blocked and undelivered_item:

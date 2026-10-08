@@ -21,8 +21,10 @@ from ..models import (
     UndeliveredMail,
     MailReply,
     SuppressionList,
+    User,
     utc_now,
 )
+from ..auth import get_current_user, get_optional_current_user
 from ..scheduler_pipeline import (
     run_scheduler_cycle,
     dispatch_gmail_smtp,
@@ -42,6 +44,7 @@ import random
 router = APIRouter(
     prefix="/api",
     tags=["Outreach Scheduler"],
+    dependencies=[Depends(get_current_user)],
 )
 
 
@@ -126,7 +129,11 @@ class SendMailRequest(BaseModel):
 
 
 @router.post("/manual/search")
-def manual_search_leads(payload: ManualSearchRequest, db: Session = Depends(get_db)):
+def manual_search_leads(
+    payload: ManualSearchRequest,
+    current_user: Optional[User] = Depends(get_optional_current_user),
+    db: Session = Depends(get_db)
+):
     """
     Step 1 & 2 Manual: Scrapes real companies for any custom query and count
     """
@@ -169,6 +176,7 @@ def manual_search_leads(payload: ManualSearchRequest, db: Session = Depends(get_
             city=item["city"],
             verification_score=item["verification_score"],
             status="email_found",
+            user_id=current_user.id if current_user else None,
         )
         db.add(account)
         inserted_accounts.append(account)
@@ -186,18 +194,26 @@ def manual_search_leads(payload: ManualSearchRequest, db: Session = Depends(get_
         config.scrape_batch_size = count
         db.commit()
 
+    db_total_q = db.query(CompanyMailAccount)
+    if current_user:
+        db_total_q = db_total_q.filter(CompanyMailAccount.user_id == current_user.id)
+
     return {
         "success": True,
         "query": query,
         "scraped_count": len(inserted_accounts),
-        "total_in_db": db.query(CompanyMailAccount).count(),
+        "total_in_db": db_total_q.count(),
         "message": f"Successfully scraped {len(inserted_accounts)} real verified company mail accounts for '{query}'."
     }
 
 
 @router.post("/mail/send")
 @router.post("/manual/send")
-def manual_send_emails(payload: Optional[SendMailRequest] = None, db: Session = Depends(get_db)):
+def manual_send_emails(
+    payload: Optional[SendMailRequest] = None,
+    current_user: Optional[User] = Depends(get_optional_current_user),
+    db: Session = Depends(get_db)
+):
     """
     Step 3: Sends outreach emails to discovered accounts and syncs to Gmail Sent Mail.
     Can send to a specific account_id or to a batch of ready accounts.
@@ -212,12 +228,18 @@ def manual_send_emails(payload: Optional[SendMailRequest] = None, db: Session = 
         db.add(config)
         db.commit()
 
-    # Load active campaign
+    # Load active campaign (user-isolated if authenticated)
     target_campaign = None
     if config.active_campaign_id:
-        target_campaign = db.query(Campaign).filter(Campaign.id == config.active_campaign_id).first()
+        camp_q = db.query(Campaign).filter(Campaign.id == config.active_campaign_id)
+        if current_user:
+            camp_q = camp_q.filter(Campaign.user_id == current_user.id)
+        target_campaign = camp_q.first()
     if not target_campaign:
-        target_campaign = db.query(Campaign).first()
+        camp_q = db.query(Campaign)
+        if current_user:
+            camp_q = camp_q.filter(Campaign.user_id == current_user.id)
+        target_campaign = camp_q.first()
 
     contacted_emails, contacted_domains, contacted_names = get_already_contacted_companies(db)
     accounts_to_contact = []
@@ -229,7 +251,10 @@ def manual_send_emails(payload: Optional[SendMailRequest] = None, db: Session = 
         import uuid as uuid_pkg
         try:
             acc_uuid = uuid_pkg.UUID(specific_acc_id)
-            acc = db.query(CompanyMailAccount).filter(CompanyMailAccount.id == acc_uuid).first()
+            acc_q = db.query(CompanyMailAccount).filter(CompanyMailAccount.id == acc_uuid)
+            if current_user:
+                acc_q = acc_q.filter(CompanyMailAccount.user_id == current_user.id)
+            acc = acc_q.first()
             if acc:
                 if is_company_already_contacted(
                     acc.company_name, acc.website, acc.email,
@@ -246,9 +271,11 @@ def manual_send_emails(payload: Optional[SendMailRequest] = None, db: Session = 
 
     # If no specific account or not found, query accounts ready for outreach
     if not accounts_to_contact:
+        cand_query = db.query(CompanyMailAccount).filter(CompanyMailAccount.status == "email_found")
+        if current_user:
+            cand_query = cand_query.filter(CompanyMailAccount.user_id == current_user.id)
         candidate_accounts = (
-            db.query(CompanyMailAccount)
-            .filter(CompanyMailAccount.status == "email_found")
+            cand_query
             .order_by(desc(CompanyMailAccount.scraped_at))
             .all()
         )
@@ -307,6 +334,7 @@ def manual_send_emails(payload: Optional[SendMailRequest] = None, db: Session = 
                 city=item["city"],
                 verification_score=item["verification_score"],
                 status="email_found",
+                user_id=current_user.id if current_user else None,
             )
             db.add(new_acc)
             accounts_to_contact.append(new_acc)
@@ -334,6 +362,7 @@ def manual_send_emails(payload: Optional[SendMailRequest] = None, db: Session = 
         run_number=run_num,
         campaign_id=target_campaign.id if target_campaign else None,
         campaign_name=target_campaign.name if target_campaign else "Manual Outreach Send",
+        user_id=current_user.id if current_user else None,
         started_at=utc_now(),
         completed_at=utc_now(),
         status="completed",
@@ -424,6 +453,7 @@ def manual_send_emails(payload: Optional[SendMailRequest] = None, db: Session = 
             delivery_mode=delivery_mode,
             sent_at=utc_now(),
             run_id=new_run.id,
+            user_id=current_user.id if current_user else None,
         )
         db.add(sent_item)
         if is_blocked and undelivered_item:
@@ -465,11 +495,17 @@ def manual_send_emails(payload: Optional[SendMailRequest] = None, db: Session = 
 
 
 @router.post("/manual/check-undelivered")
-def manual_check_undelivered(db: Session = Depends(get_db)):
+def manual_check_undelivered(
+    current_user: Optional[User] = Depends(get_optional_current_user),
+    db: Session = Depends(get_db)
+):
     """
     Step 4 Manual: Checks for undelivered / bounced emails.
     """
-    sent_records = db.query(SentMail).filter(SentMail.status == "sent").all()
+    sent_query = db.query(SentMail).filter(SentMail.status == "sent")
+    if current_user:
+        sent_query = sent_query.filter(SentMail.user_id == current_user.id)
+    sent_records = sent_query.all()
     undelivered_records = []
     if sent_records:
         bounce_candidate = random.choice(sent_records)
@@ -638,7 +674,10 @@ def manual_check_replies(db: Session = Depends(get_db)):
 
 
 @router.get("/scheduler/status")
-def get_scheduler_status(db: Session = Depends(get_db)):
+def get_scheduler_status(
+    current_user: Optional[User] = Depends(get_optional_current_user),
+    db: Session = Depends(get_db)
+):
     config = db.query(SchedulerConfig).filter(SchedulerConfig.id == 1).first()
     if not config:
         config = SchedulerConfig(id=1, is_running=False, interval_seconds=60)
@@ -651,36 +690,67 @@ def get_scheduler_status(db: Session = Depends(get_db)):
         diff = (config.next_run_at - now).total_seconds()
         seconds_left = max(0, int(diff))
 
-    # Aggregates across PostgreSQL tables
-    total_scraped = db.query(func.count(CompanyMailAccount.id)).scalar() or 0
-    ready_accounts = db.query(func.count(CompanyMailAccount.id)).filter(CompanyMailAccount.status == "email_found").scalar() or 0
-    total_sent_all = db.query(func.count(SentMail.id)).scalar() or 0
-    total_sent_success = db.query(func.count(SentMail.id)).filter(SentMail.status.in_(["sent", "replied", "replies"])).scalar() or 0
-    total_bounced = db.query(func.count(UndeliveredMail.id)).filter(
-        ~UndeliveredMail.error_code.ilike("%blocked%"),
-        ~UndeliveredMail.bounce_reason.ilike("%blocked%")
-    ).scalar() or 0
-    total_blocked = db.query(func.count(UndeliveredMail.id)).filter(
-        (UndeliveredMail.error_code.ilike("%blocked%")) |
-        (UndeliveredMail.bounce_reason.ilike("%blocked%"))
-    ).scalar() or 0
-    total_undelivered = db.query(func.count(UndeliveredMail.id)).scalar() or 0
-    total_replies = db.query(func.count(MailReply.id)).scalar() or 0
-    total_suppressed = db.query(func.count(SuppressionList.id)).scalar() or 0
-    total_campaigns_created = db.query(func.count(Campaign.id)).scalar() or 0
-    total_campaigns_run = db.query(func.count(Campaign.id)).filter(Campaign.total_runs > 0).scalar() or 0
+    # Aggregates across PostgreSQL tables (user-isolated if authenticated)
+    if current_user:
+        total_scraped = db.query(func.count(CompanyMailAccount.id)).filter(CompanyMailAccount.user_id == current_user.id).scalar() or 0
+        ready_accounts = db.query(func.count(CompanyMailAccount.id)).filter(CompanyMailAccount.user_id == current_user.id, CompanyMailAccount.status == "email_found").scalar() or 0
+        total_sent_all = db.query(func.count(SentMail.id)).filter(SentMail.user_id == current_user.id).scalar() or 0
+        total_sent_success = db.query(func.count(SentMail.id)).filter(SentMail.user_id == current_user.id, SentMail.status.in_(["sent", "replied", "replies"])).scalar() or 0
+        total_bounced = db.query(func.count(UndeliveredMail.id)).join(SentMail).filter(
+            SentMail.user_id == current_user.id,
+            ~UndeliveredMail.error_code.ilike("%blocked%"),
+            ~UndeliveredMail.bounce_reason.ilike("%blocked%")
+        ).scalar() or 0
+        total_blocked = db.query(func.count(UndeliveredMail.id)).join(SentMail).filter(
+            SentMail.user_id == current_user.id,
+            (UndeliveredMail.error_code.ilike("%blocked%")) |
+            (UndeliveredMail.bounce_reason.ilike("%blocked%"))
+        ).scalar() or 0
+        total_undelivered = db.query(func.count(UndeliveredMail.id)).join(SentMail).filter(SentMail.user_id == current_user.id).scalar() or 0
+        total_replies = db.query(func.count(MailReply.id)).join(SentMail).filter(SentMail.user_id == current_user.id).scalar() or 0
+        total_suppressed = db.query(func.count(SuppressionList.id)).scalar() or 0
+        total_campaigns_created = db.query(func.count(Campaign.id)).filter(Campaign.user_id == current_user.id).scalar() or 0
+        total_campaigns_run = db.query(func.count(Campaign.id)).filter(Campaign.user_id == current_user.id, Campaign.total_runs > 0).scalar() or 0
+    else:
+        total_scraped = db.query(func.count(CompanyMailAccount.id)).scalar() or 0
+        ready_accounts = db.query(func.count(CompanyMailAccount.id)).filter(CompanyMailAccount.status == "email_found").scalar() or 0
+        total_sent_all = db.query(func.count(SentMail.id)).scalar() or 0
+        total_sent_success = db.query(func.count(SentMail.id)).filter(SentMail.status.in_(["sent", "replied", "replies"])).scalar() or 0
+        total_bounced = db.query(func.count(UndeliveredMail.id)).filter(
+            ~UndeliveredMail.error_code.ilike("%blocked%"),
+            ~UndeliveredMail.bounce_reason.ilike("%blocked%")
+        ).scalar() or 0
+        total_blocked = db.query(func.count(UndeliveredMail.id)).filter(
+            (UndeliveredMail.error_code.ilike("%blocked%")) |
+            (UndeliveredMail.bounce_reason.ilike("%blocked%"))
+        ).scalar() or 0
+        total_undelivered = db.query(func.count(UndeliveredMail.id)).scalar() or 0
+        total_replies = db.query(func.count(MailReply.id)).scalar() or 0
+        total_suppressed = db.query(func.count(SuppressionList.id)).scalar() or 0
+        total_campaigns_created = db.query(func.count(Campaign.id)).scalar() or 0
+        total_campaigns_run = db.query(func.count(Campaign.id)).filter(Campaign.total_runs > 0).scalar() or 0
 
     active_camp_id = None
     active_camp_name = ""
+    active_subj = ""
+    active_body = ""
+    active_query = ""
     if total_campaigns_created > 0:
+        act = None
         if config.active_campaign_id:
-            act = db.query(Campaign).filter(Campaign.id == config.active_campaign_id).first()
-            if act:
-                active_camp_id = str(act.id)
-                active_camp_name = act.name
-                active_subj = act.email_subject or ""
-                active_body = act.email_body or ""
-                active_query = act.search_query or ""
+            c_filter = [Campaign.id == config.active_campaign_id]
+            if current_user:
+                c_filter.append(Campaign.user_id == current_user.id)
+            act = db.query(Campaign).filter(*c_filter).first()
+        if not act and current_user:
+            act = db.query(Campaign).filter(Campaign.user_id == current_user.id).order_by(desc(Campaign.created_at)).first()
+
+        if act:
+            active_camp_id = str(act.id)
+            active_camp_name = act.name
+            active_subj = act.email_subject or ""
+            active_body = act.email_body or ""
+            active_query = act.search_query or ""
 
 
     return {
@@ -791,7 +861,11 @@ class TriggerRequest(BaseModel):
 
 
 @router.post("/scheduler/trigger")
-def trigger_cycle_now(payload: Optional[TriggerRequest] = None, db: Session = Depends(get_db)):
+def trigger_cycle_now(
+    payload: Optional[TriggerRequest] = None,
+    current_user: Optional[User] = Depends(get_optional_current_user),
+    db: Session = Depends(get_db),
+):
     """Triggers an immediate 5-step scheduler run right now with current UI parameters"""
     config = db.query(SchedulerConfig).filter(SchedulerConfig.id == 1).first()
     if not config:
@@ -819,7 +893,8 @@ def trigger_cycle_now(payload: Optional[TriggerRequest] = None, db: Session = De
                     send_batch_size=config.send_batch_size,
                     interval_seconds=config.interval_seconds,
                     email_subject=config.email_subject,
-                    email_body=config.email_body
+                    email_body=config.email_body,
+                    user_id=current_user.id if current_user else None,
                 )
                 db.add(camp)
                 db.commit()
@@ -832,7 +907,11 @@ def trigger_cycle_now(payload: Optional[TriggerRequest] = None, db: Session = De
             config.email_body = payload.email_body
         db.commit()
 
-    result = run_scheduler_cycle(db, campaign_id=campaign_id_to_run)
+    result = run_scheduler_cycle(
+        db,
+        campaign_id=campaign_id_to_run,
+        user_id=current_user.id if current_user else None
+    )
     return result
 
 
@@ -863,13 +942,15 @@ def update_scheduler_config(payload: ConfigUpdateRequest, db: Session = Depends(
 
 
 @router.get("/scheduler/runs")
-def get_scheduler_runs(limit: int = 15, db: Session = Depends(get_db)):
-    runs = (
-        db.query(SchedulerRun)
-        .order_by(desc(SchedulerRun.run_number))
-        .limit(limit)
-        .all()
-    )
+def get_scheduler_runs(
+    limit: int = 15,
+    current_user: Optional[User] = Depends(get_optional_current_user),
+    db: Session = Depends(get_db),
+):
+    runs_q = db.query(SchedulerRun)
+    if current_user:
+        runs_q = runs_q.filter(SchedulerRun.user_id == current_user.id)
+    runs = runs_q.order_by(desc(SchedulerRun.run_number)).limit(limit).all()
     return [
         {
             "id": str(r.id),
@@ -892,13 +973,45 @@ def get_scheduler_runs(limit: int = 15, db: Session = Depends(get_db)):
 
 
 @router.get("/data/accounts")
-def get_company_accounts(limit: int = 100, db: Session = Depends(get_db)):
-    items = (
-        db.query(CompanyMailAccount)
-        .order_by(desc(CompanyMailAccount.scraped_at))
-        .limit(limit)
-        .all()
-    )
+def get_company_accounts(
+    limit: int = 200,
+    status: Optional[str] = None,
+    query: Optional[str] = None,
+    campaign_id: Optional[str] = None,
+    current_user: Optional[User] = Depends(get_optional_current_user),
+    db: Session = Depends(get_db),
+):
+    q = db.query(CompanyMailAccount)
+    if current_user:
+        q = q.filter(CompanyMailAccount.user_id == current_user.id)
+
+    if status == "scraped" or status == "email_found":
+        q = q.filter(CompanyMailAccount.status == "email_found")
+    elif status:
+        q = q.filter(CompanyMailAccount.status == status)
+
+    if query and query.strip():
+        q_term = f"%{query.strip().lower()}%"
+        q = q.filter(
+            (func.lower(CompanyMailAccount.company_name).like(q_term)) |
+            (func.lower(CompanyMailAccount.industry).like(q_term)) |
+            (func.lower(CompanyMailAccount.city).like(q_term)) |
+            (func.lower(CompanyMailAccount.email).like(q_term)) |
+            (func.lower(CompanyMailAccount.website).like(q_term))
+        )
+
+    if campaign_id:
+        import uuid as uuid_pkg
+        try:
+            c_uuid = uuid_pkg.UUID(campaign_id)
+            runs = db.query(SchedulerRun.id).filter(SchedulerRun.campaign_id == c_uuid).all()
+            run_ids = [r[0] for r in runs]
+            if run_ids:
+                q = q.filter(CompanyMailAccount.run_id.in_(run_ids))
+        except Exception:
+            pass
+
+    items = q.order_by(desc(CompanyMailAccount.scraped_at)).limit(limit).all()
     return [
         {
             "id": str(item.id),
@@ -919,9 +1032,13 @@ def get_company_accounts(limit: int = 100, db: Session = Depends(get_db)):
 def get_sent_emails(
     limit: int = 100,
     status: Optional[str] = None,
+    current_user: Optional[User] = Depends(get_optional_current_user),
     db: Session = Depends(get_db),
 ):
     query = db.query(SentMail)
+    if current_user:
+        query = query.filter(SentMail.user_id == current_user.id)
+
     if status == "sent":
         query = query.filter(SentMail.status.in_(["sent", "replied", "replies"]))
     elif status == "blocked":
@@ -948,17 +1065,19 @@ def get_sent_emails(
 
 
 @router.get("/data/bounced")
-def get_bounced_emails(limit: int = 100, db: Session = Depends(get_db)):
-    items = (
-        db.query(UndeliveredMail)
-        .filter(
-            ~UndeliveredMail.error_code.ilike("%blocked%"),
-            ~UndeliveredMail.bounce_reason.ilike("%blocked%"),
-        )
-        .order_by(desc(UndeliveredMail.detected_at))
-        .limit(limit)
-        .all()
+def get_bounced_emails(
+    limit: int = 100,
+    current_user: Optional[User] = Depends(get_optional_current_user),
+    db: Session = Depends(get_db),
+):
+    query = db.query(UndeliveredMail).filter(
+        ~UndeliveredMail.error_code.ilike("%blocked%"),
+        ~UndeliveredMail.bounce_reason.ilike("%blocked%"),
     )
+    if current_user:
+        query = query.join(SentMail).filter(SentMail.user_id == current_user.id)
+
+    items = query.order_by(desc(UndeliveredMail.detected_at)).limit(limit).all()
     return [
         {
             "id": str(item.id),
@@ -973,17 +1092,19 @@ def get_bounced_emails(limit: int = 100, db: Session = Depends(get_db)):
 
 
 @router.get("/data/blocked")
-def get_blocked_emails(limit: int = 100, db: Session = Depends(get_db)):
-    items = (
-        db.query(UndeliveredMail)
-        .filter(
-            (UndeliveredMail.error_code.ilike("%blocked%")) |
-            (UndeliveredMail.bounce_reason.ilike("%blocked%")),
-        )
-        .order_by(desc(UndeliveredMail.detected_at))
-        .limit(limit)
-        .all()
+def get_blocked_emails(
+    limit: int = 100,
+    current_user: Optional[User] = Depends(get_optional_current_user),
+    db: Session = Depends(get_db),
+):
+    query = db.query(UndeliveredMail).filter(
+        (UndeliveredMail.error_code.ilike("%blocked%")) |
+        (UndeliveredMail.bounce_reason.ilike("%blocked%")),
     )
+    if current_user:
+        query = query.join(SentMail).filter(SentMail.user_id == current_user.id)
+
+    items = query.order_by(desc(UndeliveredMail.detected_at)).limit(limit).all()
     return [
         {
             "id": str(item.id),
@@ -998,13 +1119,16 @@ def get_blocked_emails(limit: int = 100, db: Session = Depends(get_db)):
 
 
 @router.get("/data/undelivered")
-def get_undelivered_mails(limit: int = 100, db: Session = Depends(get_db)):
-    items = (
-        db.query(UndeliveredMail)
-        .order_by(desc(UndeliveredMail.detected_at))
-        .limit(limit)
-        .all()
-    )
+def get_undelivered_mails(
+    limit: int = 100,
+    current_user: Optional[User] = Depends(get_optional_current_user),
+    db: Session = Depends(get_db),
+):
+    query = db.query(UndeliveredMail)
+    if current_user:
+        query = query.join(SentMail).filter(SentMail.user_id == current_user.id)
+
+    items = query.order_by(desc(UndeliveredMail.detected_at)).limit(limit).all()
     return [
         {
             "id": str(item.id),
@@ -1019,13 +1143,16 @@ def get_undelivered_mails(limit: int = 100, db: Session = Depends(get_db)):
 
 
 @router.get("/data/replies")
-def get_mail_replies(limit: int = 100, db: Session = Depends(get_db)):
-    items = (
-        db.query(MailReply)
-        .order_by(desc(MailReply.received_at))
-        .limit(limit)
-        .all()
-    )
+def get_mail_replies(
+    limit: int = 100,
+    current_user: Optional[User] = Depends(get_optional_current_user),
+    db: Session = Depends(get_db),
+):
+    query = db.query(MailReply)
+    if current_user:
+        query = query.join(SentMail).filter(SentMail.user_id == current_user.id)
+
+    items = query.order_by(desc(MailReply.received_at)).limit(limit).all()
     return [
         {
             "id": str(item.id),
@@ -1042,8 +1169,23 @@ def get_mail_replies(limit: int = 100, db: Session = Depends(get_db)):
 
 
 @router.post("/reset")
-def reset_all_database(db: Session = Depends(get_db)):
-    """Wipes all rows in tables and resets total runs to 0 for a clean fresh start"""
+def reset_all_database(
+    current_user: Optional[User] = Depends(get_optional_current_user),
+    db: Session = Depends(get_db)
+):
+    """Wipes rows in tables for a clean fresh start (isolated to current user if signed in)"""
+    if current_user:
+        sent_ids = [s[0] for s in db.query(SentMail.id).filter(SentMail.user_id == current_user.id).all()]
+        if sent_ids:
+            db.query(MailReply).filter(MailReply.sent_mail_id.in_(sent_ids)).delete(synchronize_session=False)
+            db.query(UndeliveredMail).filter(UndeliveredMail.sent_mail_id.in_(sent_ids)).delete(synchronize_session=False)
+        db.query(SentMail).filter(SentMail.user_id == current_user.id).delete(synchronize_session=False)
+        db.query(CompanyMailAccount).filter(CompanyMailAccount.user_id == current_user.id).delete(synchronize_session=False)
+        db.query(SchedulerRun).filter(SchedulerRun.user_id == current_user.id).delete(synchronize_session=False)
+        db.query(Campaign).filter(Campaign.user_id == current_user.id).delete(synchronize_session=False)
+        db.commit()
+        return {"success": True, "message": "Your workspace data was wiped clean."}
+
     db.query(MailReply).delete()
     db.query(UndeliveredMail).delete()
     db.query(SentMail).delete()
@@ -1186,20 +1328,24 @@ def test_smtp_connection(payload: SmtpTestRequest):
 # =============================================================================
 
 @router.get("/campaigns")
-def list_campaigns(db: Session = Depends(get_db)):
-    """Returns all created campaigns with individual run metrics and active indicator"""
+def list_campaigns(
+    current_user: Optional[User] = Depends(get_optional_current_user),
+    db: Session = Depends(get_db)
+):
+    """Returns all created campaigns with individual run metrics and active indicator (isolated by user)"""
     config = db.query(SchedulerConfig).filter(SchedulerConfig.id == 1).first()
     active_id = str(config.active_campaign_id) if config and config.active_campaign_id else None
 
-    campaigns = db.query(Campaign).order_by(desc(Campaign.created_at)).all()
+    query = db.query(Campaign)
+    if current_user:
+        query = query.filter(Campaign.user_id == current_user.id)
 
-    # Validate that active_campaign_id actually exists in the database
+    campaigns = query.order_by(desc(Campaign.created_at)).all()
+
+    # Validate that active_campaign_id actually exists in this user's campaigns
     existing_ids = {str(c.id) for c in campaigns}
     if active_id and active_id not in existing_ids:
         active_id = str(campaigns[0].id) if campaigns else None
-        if config:
-            config.active_campaign_id = campaigns[0].id if campaigns else None
-            db.commit()
 
     total_created = len(campaigns)
     total_run = sum(1 for c in campaigns if c.total_runs > 0)
@@ -1237,7 +1383,11 @@ def list_campaigns(db: Session = Depends(get_db)):
 
 
 @router.post("/campaigns/create")
-def create_campaign(payload: CampaignCreateRequest, db: Session = Depends(get_db)):
+def create_campaign(
+    payload: CampaignCreateRequest,
+    current_user: Optional[User] = Depends(get_optional_current_user),
+    db: Session = Depends(get_db)
+):
     """Creates a new campaign, optionally sets it as active, and optionally runs it right away"""
     name = payload.name.strip()
     if not name:
@@ -1261,6 +1411,7 @@ def create_campaign(payload: CampaignCreateRequest, db: Session = Depends(get_db
         total_leads_scraped=0,
         total_emails_sent=0,
         total_replies=0,
+        user_id=current_user.id if current_user else None,
     )
     db.add(campaign)
     db.commit()
@@ -1291,7 +1442,11 @@ def create_campaign(payload: CampaignCreateRequest, db: Session = Depends(get_db
 
     cycle_result = None
     if payload.start_cycle_now:
-        cycle_result = run_scheduler_cycle(db, campaign_id=campaign.id)
+        cycle_result = run_scheduler_cycle(
+            db,
+            campaign_id=campaign.id,
+            user_id=current_user.id if current_user else None,
+        )
 
     return {
         "success": True,
@@ -1311,7 +1466,11 @@ def create_campaign(payload: CampaignCreateRequest, db: Session = Depends(get_db
 
 
 @router.post("/campaigns/test-send")
-def send_test_campaign_emails(payload: CampaignTestSendRequest, db: Session = Depends(get_db)):
+def send_test_campaign_emails(
+    payload: CampaignTestSendRequest,
+    current_user: Optional[User] = Depends(get_optional_current_user),
+    db: Session = Depends(get_db)
+):
     """
     Sends live test emails to multiple comma-separated email accounts at once via configured SMTP.
     """
@@ -1386,6 +1545,7 @@ def send_test_campaign_emails(payload: CampaignTestSendRequest, db: Session = De
                 body_snippet=body[:250],
                 status="sent",
                 delivery_mode="live_smtp",
+                user_id=current_user.id if current_user else None,
             )
             db.add(sent_record)
             results.append({
@@ -1421,7 +1581,11 @@ def send_test_campaign_emails(payload: CampaignTestSendRequest, db: Session = De
 
 
 @router.post("/campaigns/{campaign_id}/activate")
-def activate_campaign(campaign_id: str, db: Session = Depends(get_db)):
+def activate_campaign(
+    campaign_id: str,
+    current_user: Optional[User] = Depends(get_optional_current_user),
+    db: Session = Depends(get_db)
+):
     """Sets a campaign as active for the automated scheduler"""
     import uuid as uuid_pkg
     try:
@@ -1429,7 +1593,10 @@ def activate_campaign(campaign_id: str, db: Session = Depends(get_db)):
     except Exception:
         raise HTTPException(status_code=400, detail="Invalid campaign ID format.")
 
-    campaign = db.query(Campaign).filter(Campaign.id == c_uuid).first()
+    camp_q = db.query(Campaign).filter(Campaign.id == c_uuid)
+    if current_user:
+        camp_q = camp_q.filter(Campaign.user_id == current_user.id)
+    campaign = camp_q.first()
     if not campaign:
         raise HTTPException(status_code=404, detail="Campaign not found.")
 
@@ -1456,7 +1623,11 @@ def activate_campaign(campaign_id: str, db: Session = Depends(get_db)):
 
 
 @router.post("/campaigns/{campaign_id}/run")
-def run_campaign_now(campaign_id: str, db: Session = Depends(get_db)):
+def run_campaign_now(
+    campaign_id: str,
+    current_user: Optional[User] = Depends(get_optional_current_user),
+    db: Session = Depends(get_db)
+):
     """Immediately runs a 5-step cycle for this specific campaign"""
     import uuid as uuid_pkg
     try:
@@ -1464,16 +1635,27 @@ def run_campaign_now(campaign_id: str, db: Session = Depends(get_db)):
     except Exception:
         raise HTTPException(status_code=400, detail="Invalid campaign ID format.")
 
-    campaign = db.query(Campaign).filter(Campaign.id == c_uuid).first()
+    camp_q = db.query(Campaign).filter(Campaign.id == c_uuid)
+    if current_user:
+        camp_q = camp_q.filter(Campaign.user_id == current_user.id)
+    campaign = camp_q.first()
     if not campaign:
         raise HTTPException(status_code=404, detail="Campaign not found.")
 
-    result = run_scheduler_cycle(db, campaign_id=campaign.id)
+    result = run_scheduler_cycle(
+        db,
+        campaign_id=campaign.id,
+        user_id=current_user.id if current_user else None,
+    )
     return result
 
 
 @router.delete("/campaigns/{campaign_id}")
-def delete_campaign(campaign_id: str, db: Session = Depends(get_db)):
+def delete_campaign(
+    campaign_id: str,
+    current_user: Optional[User] = Depends(get_optional_current_user),
+    db: Session = Depends(get_db)
+):
     """Deletes a campaign and its associated scheduler runs"""
     import uuid as uuid_pkg
     try:
@@ -1481,7 +1663,10 @@ def delete_campaign(campaign_id: str, db: Session = Depends(get_db)):
     except Exception:
         raise HTTPException(status_code=400, detail="Invalid campaign ID format.")
 
-    campaign = db.query(Campaign).filter(Campaign.id == c_uuid).first()
+    camp_q = db.query(Campaign).filter(Campaign.id == c_uuid)
+    if current_user:
+        camp_q = camp_q.filter(Campaign.user_id == current_user.id)
+    campaign = camp_q.first()
     if not campaign:
         raise HTTPException(status_code=404, detail="Campaign not found.")
 
@@ -1489,7 +1674,10 @@ def delete_campaign(campaign_id: str, db: Session = Depends(get_db)):
 
     config = db.query(SchedulerConfig).filter(SchedulerConfig.id == 1).first()
     if config and config.active_campaign_id == campaign.id:
-        remaining = db.query(Campaign).filter(Campaign.id != campaign.id).order_by(desc(Campaign.created_at)).first()
+        rem_q = db.query(Campaign).filter(Campaign.id != campaign.id)
+        if current_user:
+            rem_q = rem_q.filter(Campaign.user_id == current_user.id)
+        remaining = rem_q.order_by(desc(Campaign.created_at)).first()
         if remaining:
             config.active_campaign_id = remaining.id
             config.campaign_name = remaining.name
@@ -1518,7 +1706,11 @@ class TemplateEnhanceRequest(BaseModel):
 
 
 @router.post("/template/save")
-def save_email_template(payload: TemplateSaveRequest, db: Session = Depends(get_db)):
+def save_email_template(
+    payload: TemplateSaveRequest,
+    current_user: Optional[User] = Depends(get_optional_current_user),
+    db: Session = Depends(get_db)
+):
     """Saves email template to SchedulerConfig and active Campaign"""
     config = db.query(SchedulerConfig).filter(SchedulerConfig.id == 1).first()
     if not config:
@@ -1539,13 +1731,19 @@ def save_email_template(payload: TemplateSaveRequest, db: Session = Depends(get_
         target_camp_id = config.active_campaign_id
 
     if target_camp_id:
-        camp = db.query(Campaign).filter(Campaign.id == target_camp_id).first()
+        camp_q = db.query(Campaign).filter(Campaign.id == target_camp_id)
+        if current_user:
+            camp_q = camp_q.filter(Campaign.user_id == current_user.id)
+        camp = camp_q.first()
         if camp:
             camp.email_subject = payload.subject.strip()
             camp.email_body = payload.body
     else:
-        # Fallback: also apply to all existing campaigns so no campaign is left with old copy
-        for camp in db.query(Campaign).all():
+        # Fallback: apply to campaigns owned by this user (or all if unauthenticated)
+        camp_q = db.query(Campaign)
+        if current_user:
+            camp_q = camp_q.filter(Campaign.user_id == current_user.id)
+        for camp in camp_q.all():
             camp.email_subject = payload.subject.strip()
             camp.email_body = payload.body
 

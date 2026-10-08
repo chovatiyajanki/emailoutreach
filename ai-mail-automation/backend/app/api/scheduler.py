@@ -139,11 +139,17 @@ def manual_search_leads(
     query = payload.query.strip() or "B2B Software and Tech Companies"
     count = max(1, min(payload.count, 50))
 
-    contacted_emails, contacted_domains, contacted_names = get_already_contacted_companies(db)
-    existing_domains = {extract_domain(r[0]) for r in db.query(CompanyMailAccount.website).all() if r[0]}
-    existing_domains.update({extract_domain(r[0]) for r in db.query(CompanyMailAccount.email).all() if r[0]})
-    existing_names = {normalize_company_name(r[0]) for r in db.query(CompanyMailAccount.company_name).all() if r[0]}
-    existing_emails = {r[0].strip().lower() for r in db.query(CompanyMailAccount.email).all() if r[0]}
+    user_id = current_user.id if current_user else None
+    contacted_emails, contacted_domains, contacted_names = get_already_contacted_companies(db, user_id=user_id)
+
+    q_existing = db.query(CompanyMailAccount)
+    if user_id:
+        q_existing = q_existing.filter(CompanyMailAccount.user_id == user_id)
+
+    existing_domains = {extract_domain(r[0]) for r in q_existing.with_entities(CompanyMailAccount.website).all() if r[0]}
+    existing_domains.update({extract_domain(r[0]) for r in q_existing.with_entities(CompanyMailAccount.email).all() if r[0]})
+    existing_names = {normalize_company_name(r[0]) for r in q_existing.with_entities(CompanyMailAccount.company_name).all() if r[0]}
+    existing_emails = {r[0].strip().lower() for r in q_existing.with_entities(CompanyMailAccount.email).all() if r[0]}
 
     all_exclude_domains = contacted_domains.union(existing_domains)
     all_exclude_names = contacted_names.union(existing_names)
@@ -240,7 +246,7 @@ def manual_send_emails(
             camp_q = camp_q.filter(Campaign.user_id == current_user.id)
         target_campaign = camp_q.first()
 
-    contacted_emails, contacted_domains, contacted_names = get_already_contacted_companies(db)
+    contacted_emails, contacted_domains, contacted_names = get_already_contacted_companies(db, user_id=current_user.id if current_user else None)
     accounts_to_contact = []
     seen_batch_domains = set()
     seen_batch_names = set()

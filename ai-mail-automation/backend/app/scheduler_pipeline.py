@@ -585,13 +585,17 @@ def run_scheduler_cycle(
     log("[STEP 1] Scraping real company mail accounts from verified live web targets...")
 
     # Retrieve all historically contacted companies to prevent duplicate outreach
-    contacted_emails, contacted_domains, contacted_names = get_already_contacted_companies(db)
+    contacted_emails, contacted_domains, contacted_names = get_already_contacted_companies(db, user_id=effective_user_id)
 
     # Retrieve all existing domains and normalized company names currently in DB
-    existing_domains = {extract_domain(r[0]) for r in db.query(CompanyMailAccount.website).all() if r[0]}
-    existing_domains.update({extract_domain(r[0]) for r in db.query(CompanyMailAccount.email).all() if r[0]})
-    existing_names = {normalize_company_name(r[0]) for r in db.query(CompanyMailAccount.company_name).all() if r[0]}
-    existing_emails = {r[0].strip().lower() for r in db.query(CompanyMailAccount.email).all() if r[0]}
+    q_existing = db.query(CompanyMailAccount)
+    if effective_user_id:
+        q_existing = q_existing.filter(CompanyMailAccount.user_id == effective_user_id)
+
+    existing_domains = {extract_domain(r[0]) for r in q_existing.with_entities(CompanyMailAccount.website).all() if r[0]}
+    existing_domains.update({extract_domain(r[0]) for r in q_existing.with_entities(CompanyMailAccount.email).all() if r[0]})
+    existing_names = {normalize_company_name(r[0]) for r in q_existing.with_entities(CompanyMailAccount.company_name).all() if r[0]}
+    existing_emails = {r[0].strip().lower() for r in q_existing.with_entities(CompanyMailAccount.email).all() if r[0]}
 
     all_exclude_domains = contacted_domains.union(existing_domains)
     all_exclude_names = contacted_names.union(existing_names)
@@ -660,7 +664,7 @@ def run_scheduler_cycle(
     log("[STEP 3] Dispatching outreach emails (Strict Rule: Send only 1 mail per company)...")
 
     # Reload fresh contacted sets from database
-    contacted_emails, contacted_domains, contacted_names = get_already_contacted_companies(db)
+    contacted_emails, contacted_domains, contacted_names = get_already_contacted_companies(db, user_id=effective_user_id)
 
     cand_q = db.query(CompanyMailAccount).filter(CompanyMailAccount.status == "email_found")
     if effective_user_id:

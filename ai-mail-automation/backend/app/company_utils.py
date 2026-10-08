@@ -72,10 +72,10 @@ def normalize_company_name(name: Optional[str]) -> str:
     return cleaned
 
 
-def get_already_contacted_companies(db: Session) -> Tuple[Set[str], Set[str], Set[str]]:
+def get_already_contacted_companies(db: Session, user_id: Optional[object] = None) -> Tuple[Set[str], Set[str], Set[str]]:
     """
     Retrieves sets of all emails, domains, and normalized company names
-    that have already received an email across the entire database history.
+    that have already received an email across history (isolated by user if user_id is provided).
 
     Returns:
         (contacted_emails, contacted_domains, contacted_company_names)
@@ -88,7 +88,10 @@ def get_already_contacted_companies(db: Session) -> Tuple[Set[str], Set[str], Se
 
     # 1. From SentMail table (actual sent messages)
     try:
-        sent_records = db.query(SentMail).all()
+        sent_q = db.query(SentMail)
+        if user_id is not None:
+            sent_q = sent_q.filter(SentMail.user_id == user_id)
+        sent_records = sent_q.all()
         for sm in sent_records:
             if sm.to_email:
                 em = sm.to_email.strip().lower()
@@ -110,11 +113,12 @@ def get_already_contacted_companies(db: Session) -> Tuple[Set[str], Set[str], Se
 
     # 2. From CompanyMailAccount where status indicates prior contact
     try:
-        contacted_accs = (
-            db.query(CompanyMailAccount)
-            .filter(CompanyMailAccount.status.in_(["sent", "bounced", "replied", "already_contacted"]))
-            .all()
+        acc_q = db.query(CompanyMailAccount).filter(
+            CompanyMailAccount.status.in_(["sent", "bounced", "replied", "already_contacted"])
         )
+        if user_id is not None:
+            acc_q = acc_q.filter(CompanyMailAccount.user_id == user_id)
+        contacted_accs = acc_q.all()
         for acc in contacted_accs:
             if acc.email:
                 em = acc.email.strip().lower()

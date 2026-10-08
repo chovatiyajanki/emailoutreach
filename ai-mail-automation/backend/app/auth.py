@@ -1,3 +1,4 @@
+import os
 import bcrypt
 import jwt
 from datetime import datetime, timedelta, timezone
@@ -7,13 +8,12 @@ from fastapi import Depends, HTTPException, status
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 from sqlalchemy.orm import Session
 
-from .config import settings
 from .database import get_db
 from .models import User
 
 # JWT Configuration
-SECRET_KEY = settings.JWT_SECRET_KEY
-if len(SECRET_KEY) < 32:
+SECRET_KEY = os.getenv("JWT_SECRET_KEY")
+if not SECRET_KEY or len(SECRET_KEY) < 32:
     raise RuntimeError("JWT_SECRET_KEY must be configured with at least 32 characters.")
 ALGORITHM = "HS256"
 ACCESS_TOKEN_EXPIRE_MINUTES = 60 * 24 * 7  # 7 days
